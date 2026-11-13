@@ -1,0 +1,12 @@
+# Keeps local tooling, build products, and hardware backups out of source control.
+# Depends on the PlatformIO build layout and the diagnostic workflow in docs/.
+.pio/
+.agents/
+.codex/
+.aws/
+.ai/
+.rollback/
+.evidence/
+__pycache__/
+*.pyc
+.venv/
