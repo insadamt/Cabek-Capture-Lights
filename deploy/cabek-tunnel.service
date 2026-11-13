@@ -1,0 +1,26 @@
+# Starts the existing backend and its single persistent lighting owner at boot.
+# Depends on /opt/cabek-ai, the cabek account, and /etc/cabek-ai.env.
+[Unit]
+Description=CABEK tunnel application and ESP32 lighting
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cabek
+Group=cabek
+WorkingDirectory=/opt/cabek-ai
+EnvironmentFile=/etc/cabek-ai.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/cabek-ai/.venv/bin/python -m api --port 8000
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=45
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/cabek-ai
+
+[Install]
+WantedBy=multi-user.target

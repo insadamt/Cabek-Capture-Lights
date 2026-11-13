@@ -201,3 +201,116 @@ performed after successful validation. No whole-flash erase was used.
   and continuous frames. Verify UART0 carries only the 115200-baud console.
 - [ ] Run a longer serial soak with the decoder connected; no corruption,
   unintended resets, DMX errors, or sustained heap decline.
+
+## 2026-11-13 — Backend-owned application lighting integration
+
+This entry records the significant application integration, its verification and
+remaining hardware acceptance. It depends on the unchanged firmware above and the
+sibling FastAPI backend and React capture workflow.
+
+### Decision and delivered behavior
+
+Repository inspection found FastAPI rather than Laravel, one local scan manager,
+and a backend-owned mock photo capture service. Lighting therefore lives inside
+the existing API process, with one serial worker and a separate readiness worker.
+The launcher starts BOOTING before application imports; lifespan enters
+INITIALIZING and enables readiness checks only after scan/capture recovery finishes.
+Actual model availability, the scan supervisor, writable storage and valid provider
+photo plans gate READY. Existing pricing readiness remains separate from capture.
+
+Capture delivery owns SCANNING, and validated photo completion owns COMPLETED with
+a monotonic 10-second deadline. Failures/interruption never enter success green.
+New capture identities supersede previous timers/tests; repeated and stale events
+are idempotent. React continues to use its existing capture request; refresh and
+navigation never send hardware startup commands.
+
+A persistent exclusive pyserial transport validates the existing OK/STATUS
+protocol, queries health, suppresses redundant color writes, detects resets/DMX
+stalls, and reconnects with backoff and latest-state replay. Hardware failure
+clears current acknowledgment while preserving desired application state. Status
+explicitly distinguishes those values and retains historical firmware/last-command
+information. One timed maintenance test can run only while healthy/idle and is
+superseded by capture. Lighting routes require bearer access; testing requires a
+separate maintenance credential. No serial credentials are shipped to React.
+
+Firmware source, GPIO wiring, DMX timing/address/channel mapping and RGB white
+remain unchanged. BOOTING uses the existing BLUE/OFF commands in the bridge.
+No firmware was uploaded or device reset by this implementation.
+
+### Changed files and commits
+
+Backend commit `c29b3f4` — `feat(lighting): integrate reliable ESP32 control with capture lifecycle`:
+
+- `api/lighting_config.py`, `lighting_protocol.py`, `lighting_state.py`,
+  `lighting_service.py`, `lighting_readiness.py`, `lighting_schemas.py` and
+  `lighting_routes.py`: configuration, serial ownership, state arbitration,
+  readiness, status and authenticated routes.
+- `api/__main__.py`, `api/main.py`, `api/config.py`, `api/capture_service.py`:
+  launcher/lifespan and actual capture lifecycle integration.
+- `.env.example`, `requirements-api.txt`, `README.md`, `docs/lighting-api.md`:
+  opt-in configuration, pyserial dependency and operational/API reference.
+- `tests/lighting/test_state.py`, `test_bridge.py`, `test_pty.py`,
+  `tests/api/test_lighting.py`, `tests/api/test_dossiers.py`: lifecycle, transport,
+  security, restart and OpenAPI coverage.
+
+Frontend commit `f440f33` — `docs(capture): describe backend-owned physical tunnel lighting`:
+`docs/api-integration.md` explains why the existing React capture flow needs no
+new lighting state or browser secret.
+
+This ESP32 repository adds `README.md`, `deploy/cabek-tunnel.service`,
+`docs/lighting-deployment.md`, this journal entry and additional hidden AI folder
+ignore rules in `.gitignore`. The unit is supplied for operator installation;
+it was not enabled on this development machine.
+
+Preexisting changes in all repositories were retained. The backend commit was
+prepared and tested separately against its original HEAD so unrelated local
+capture/expertise/financial/UI changes are excluded. Existing local stable-port
+edits in `platformio.ini` and `scripts/test_serial.py` are also excluded from the
+ESP32 integration commit.
+
+### Validation results
+
+- Final backend working tree: **322 tests passed**, including 27 new lighting
+  tests; isolated lighting-only commit: **297 tests passed**. One existing
+  Starlette/httpx deprecation warning.
+- Real pyserial with a Linux pseudo-TTY and emulated firmware: all legacy color
+  commands/status, persistent session, missing device and reenumeration replay.
+  Mock tests additionally cover corrupt/missing/mismatched acknowledgments,
+  ESP32 reboot, stalled DMX frames, reconnect backoff, unavailable hardware,
+  blinking, readiness failure/recovery, 10-second expiry, stale events, overlapping
+  scans, concurrent HTTP requests, authorization and maintenance expiry/priority.
+- Readiness checks cannot delay serial commands; startup recovery cannot falsely
+  trigger READY. Tests explicitly block these operations to verify the guarantees.
+- React: **663 tests passed across 81 files**; TypeScript/Vite production build
+  passed. Existing large-bundle advisory remains.
+- PlatformIO: **serial_only, dmx_init and esp32dev all built successfully**;
+  no upload. Python compilation and Git whitespace checks passed. New/modified
+  implementation files remain below 500 lines. No Playwright/browser automation.
+- The sandbox hid USB devices. Host-level enumeration found the ESP32 at its
+  stable CP2102 by-id path, but another running serial client owns its exclusive
+  lock. An attempted production transport connection correctly refused to steal
+  it. That client was left running; new real-device command acknowledgments and
+  physical strip behavior remain unverified in this task.
+- Systemd unit validation passed using a temporary copy with this host's Python
+  executable; the original `/opt/cabek-ai` executable is not installed here.
+- Installed pyserial 3.5 in the backend's existing virtual environment. The
+  deployment unit still requires actual host paths, service account, serial
+  permissions, sample provider configuration and private credentials.
+
+### Manual acceptance and operational limits
+
+Follow the complete [Linux deployment and hardware checklist](lighting-deployment.md)
+and the [backend curl procedure](../../cabek_ai_global/docs/lighting-api.md).
+At minimum release the current serial client, observe all five strip outputs,
+check startup readiness, complete/fail/interrupt captures, start another capture
+during green, test missing/bad/maintenance credentials, unplug/reconnect USB,
+reset ESP32 and restart the application/host. Confirm graceful shutdown OFF and
+run a sustained hardware soak.
+
+No physical LED colors, real unplug/replug, ESP32 power reset or installed systemd
+startup were observed. A host cannot command disconnected hardware: the last LED
+output may persist, and forced process termination cannot guarantee OFF without
+a firmware host-loss watchdog. The existing firmware was intentionally preserved.
+The current camera provider is still simulated; this change adds lighting, not
+physical camera drivers. Public access requires authenticated protection for the
+whole capture API as well as the new lighting endpoints.
