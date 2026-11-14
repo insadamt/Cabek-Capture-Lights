@@ -42,12 +42,19 @@ owns the completion timer, cancels it for a new capture, and retries failed HTTP
 commands outside capture requests. Accepted effects are not resent as heartbeats.
 No lighting readiness probe or application snapshot is required by the API.
 
-All application lighting decisions and HTTP calls run in the CABEK AI backend.
-The frontend sends only its usual capture requests, with no lighting page, client,
-service URL, timer or Vite lighting proxy. Configure the service URL exclusively
-through the backend's `CABEK_LIGHTS_API_URL`. CABEK AI does not expose lighting
-endpoints to the browser. Keep the independent service on loopback; use its two
-HTTP endpoints locally for manual diagnostics.
+Automatic lighting decisions and all service calls run in the CABEK AI backend.
+Five rapid clicks on the Dynamic Island open the central `/settings` page, which
+contains light tests. The browser calls CABEK AI's `/api/settings/lights/set` and
+`/api/settings/lights/off` actions using the normal application API address.
+Configure the private lighting service URL only in backend `CABEK_LIGHTS_API_URL`.
+The independent lighting service still has exactly its two original endpoints.
+
+Manual settings actions cancel the earlier completion countdown and return real
+hardware/firmware errors. Opening settings does not start an effect. Repeating
+tests continue until replaced or stopped; new captures still select their normal
+automatic effects. Vite blocks LAN access to the settings prefix, and CABEK AI
+requires loopback clients. Preserve this local boundary in production proxies;
+the five-click shortcut controls navigation, not authorization.
 
 Use the [manual hardware checklist](lighting-effects.md) before accepting the
 installation. Do not claim visible LED behavior from serial acknowledgments alone.

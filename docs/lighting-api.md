@@ -83,5 +83,6 @@ latest frame. Rejected SET requests are not activated later. Failed OFF requests
 remain cancelled and retry OFF after reconnection.
 
 There are no status, preview, capability, state or event routes. The retired
-`/api/v1/lights/*` endpoints return 404. CABEK AI owns automatic lighting commands in its backend. The frontend has no
-lighting controls, requests or proxy. Use local HTTP commands for manual diagnostics.
+`/api/v1/lights/*` endpoints return 404. CABEK AI owns automatic lighting commands in its backend. The settings page sends manual tests through CABEK AI at
+`/api/settings/lights/set` and `/api/settings/lights/off`; the browser never calls
+this service directly. Local HTTP diagnostics remain available.

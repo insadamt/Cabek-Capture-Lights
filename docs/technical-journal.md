@@ -59,3 +59,18 @@ the current contract is the [minimal API reference](lighting-api.md).
   firmware and the backend effect sequence are unchanged.
 - Verification: 20 backend lighting/capture tests, 42 frontend routing/capture
   tests and the production build passed. Physical lights were not tested.
+
+## 14 Nov 2026 — Central settings and backend-mediated light tests
+
+- Added `/settings`, opened by five rapid Dynamic Island clicks, with manual light
+  tests. Single-click home navigation is deferred 600 ms to distinguish the gesture.
+- Added two local CABEK AI settings actions that forward to the lighting service,
+  preserving errors and keeping its address out of browser configuration. Accepted manual
+  tests cancel the earlier completion timer and share serialized backend delivery
+  with automatic lighting, so stale retries cannot replace a test.
+- The independent lighting service and firmware are unchanged. Both backend and
+  Vite enforce local settings access; the hidden gesture is only navigation.
+- Verification: 34 frontend gesture/settings/island/routing tests, 35 backend
+  settings/lighting/capture tests and the production build passed. No browser
+  automation or physical hardware tests were performed. Failed manual tests
+  preserve the previous automatic sequence; newer capture events remain pending.

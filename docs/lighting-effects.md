@@ -51,6 +51,6 @@ Software tests cannot confirm USB reset behavior, electrical DMX or visible colo
 - [ ] On legacy firmware, confirm five legacy outputs work and smooth effects return 501.
 - [ ] Run CABEK AI: startup → white → red scan pulses → green → white after ten seconds.
 - [ ] Begin another capture during green; check that the previous timer cannot overwrite red.
-- [ ] Confirm the frontend has no lighting controls or requests to port 8001; refresh/close it during a capture and verify backend lighting continues.
+- [ ] Click the Dynamic Island five times to open settings. Test colors, effects and OFF; confirm browser requests go to CABEK AI only and LAN settings commands are rejected.
 
 Historical firmware investigations remain in the [journal archive](archive/technical-journal-2026-11.md).
