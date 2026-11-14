@@ -1,4 +1,4 @@
-"""Apply authenticated application snapshots without hosting CABEK application code.
+"""Apply application lifecycle snapshots without hosting CABEK application code.
 
 Depends on the standalone lighting state and monotonic elapsed times; repeated
 heartbeats preserve animation phases and never extend a completion deadline.
@@ -6,7 +6,7 @@ heartbeats preserve animation phases and never extend a completion deadline.
 from typing import Literal
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from lighting_api.lighting_routes import authorize
+from lighting_api.lighting_routes import require_enabled
 from lighting_api.lighting_state import timestamp
 
 class ApplicationSnapshot(BaseModel):
@@ -27,7 +27,7 @@ class ApplicationSnapshot(BaseModel):
             raise ValueError('READY requires actual application readiness')
         return self
 
-router = APIRouter(prefix='/api/v1/lights', dependencies=[Depends(authorize)])
+router = APIRouter(prefix='/api/v1/lights', dependencies=[Depends(require_enabled)])
 
 @router.post('/events', status_code=202)
 def application_event(payload: ApplicationSnapshot, request: Request):

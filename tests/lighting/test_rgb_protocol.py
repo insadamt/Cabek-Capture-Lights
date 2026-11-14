@@ -45,7 +45,7 @@ class RgbFirmwareSerial(FirmwareSerial):
 def make_rgb_service():
     now = [0.0]
     ports = []
-    settings = LightingSettings(enabled=True, port='fake', token='c' * 32, maintenance_token='m' * 32, timeout=.01)
+    settings = LightingSettings(enabled=True, port='fake', timeout=.01)
     def factory(**kwargs):
         ports.append(RgbFirmwareSerial(**kwargs))
         return ports[-1]

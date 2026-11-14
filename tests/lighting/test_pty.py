@@ -48,8 +48,7 @@ def test_real_serial_session_and_reconnect_to_reenumerated_device(tmp_path):
     first, second = FirmwarePeer(), FirmwarePeer()
     stable_port = tmp_path / "stable-esp32"
     stable_port.symlink_to(first.device)
-    settings = LightingSettings(enabled=True, port=str(stable_port), timeout=.3,
-                                token="c" * 32, maintenance_token="m" * 32)
+    settings = LightingSettings(enabled=True, port=str(stable_port), timeout=.3)
     service = LightingService(settings, SerialLightingLink(settings))
     try:
         service.state.transition("BOOTING")

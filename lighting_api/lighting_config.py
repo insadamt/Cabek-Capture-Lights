@@ -1,10 +1,9 @@
 """Configure the optional local lighting owner and bounded effect rendering.
 
-Depends on environment configuration; bearer tokens stay on the tunnel host and
-are separate from pricing credentials and browser configuration.
+Depends on environment configuration and validated hardware/rendering limits.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import os
 
 
@@ -13,8 +12,6 @@ class LightingSettings:
     enabled: bool = False
     port: str = "auto"
     baud: int = 115200
-    token: str = field(default="", repr=False)
-    maintenance_token: str = field(default="", repr=False)
     timeout: float = 1.0
     reconnect_seconds: float = 2.0
     health_seconds: float = 5.0
@@ -41,9 +38,6 @@ class LightingSettings:
             raise ValueError("Color order must be a permutation of RGB.")
         if self.pixel_mapping and sorted(self.pixel_mapping) != list(range(self.pixel_count)):
             raise ValueError("Zone mapping must be a permutation of all logical zone indices.")
-        if self.enabled and (len(self.token) < 32 or len(self.maintenance_token) < 32
-                             or self.token == self.maintenance_token):
-            raise ValueError("Lighting requires two distinct bearer tokens of at least 32 characters.")
 
     @classmethod
     def from_environment(cls):
@@ -61,8 +55,6 @@ class LightingSettings:
             enabled=os.getenv("CABEK_LIGHTS_ENABLED", "0") == "1",
             port=os.getenv("CABEK_LIGHTS_PORT", "auto"),
             baud=int(os.getenv("CABEK_LIGHTS_BAUD", "115200")),
-            token=os.getenv("CABEK_LIGHTS_TOKEN", ""),
-            maintenance_token=os.getenv("CABEK_LIGHTS_MAINTENANCE_TOKEN", ""),
             timeout=float(os.getenv("CABEK_LIGHTS_TIMEOUT", "1")),
             reconnect_seconds=float(os.getenv("CABEK_LIGHTS_RECONNECT_SECONDS", "2")),
             health_seconds=float(os.getenv("CABEK_LIGHTS_HEALTH_SECONDS", "5")),

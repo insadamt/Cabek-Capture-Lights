@@ -4,14 +4,10 @@ A standalone FastAPI service running at `http://127.0.0.1:8001`. All endpoints s
 
 CABEK AI owns the capture lifecycle; this service owns the lighting hardware. A successful API response means a request was **accepted**, not that visible LEDs were verified.
 
-## Authentication
+## Access
 
-Send `Authorization: Bearer <token>` on every request.
-
-- **Control token** (`CABEK_LIGHTS_TOKEN`): status, capabilities, effect catalog, application lifecycle events and permitted state requests.
-- **Maintenance token** (`CABEK_LIGHTS_MAINTENANCE_TOKEN`): also allows previews, tests and stopping previews.
-
-Keep both private. Never include them in frontend environment variables, URLs or browser storage.
+Requests do not require tokens or an Authorization header. Preview/state rules,
+parameter validation and capture priority still apply.
 
 ## Endpoints
 
@@ -28,31 +24,31 @@ Keep both private. Never include them in frontend environment variables, URLs or
 
 ### Try an effect
 
-Set the base URL and credentials in your shell (do not paste actual secrets into scripts):
+Set the base URL in your shell:
 
 ```sh
 export LIGHTS=http://127.0.0.1:8001/api/v1/lights
-curl -H "Authorization: Bearer $CABEK_LIGHTS_TOKEN" "$LIGHTS/capabilities"
-curl -H "Authorization: Bearer $CABEK_LIGHTS_TOKEN" "$LIGHTS/effects"
+curl "$LIGHTS/capabilities"
+curl "$LIGHTS/effects"
 ```
 
-When the application is healthy and **READY**, an authorized maintainer can preview an effect:
+When the application is healthy and **READY**, you can preview an effect:
 
 ```sh
-curl -X POST "$LIGHTS/effects" -H "Authorization: Bearer $CABEK_LIGHTS_MAINTENANCE_TOKEN" -H "Content-Type: application/json" -d '{"effect":"breathing","color":"#2563EB","duration_ms":2000,"brightness":80,"repeat":true}'
+curl -X POST "$LIGHTS/effects" -H "Content-Type: application/json" -d '{"effect":"breathing","color":"#2563EB","duration_ms":2000,"brightness":80,"repeat":true}'
 ```
 
 Stop the preview:
 
 ```sh
-curl -X POST "$LIGHTS/stop" -H "Authorization: Bearer $CABEK_LIGHTS_MAINTENANCE_TOKEN"
+curl -X POST "$LIGHTS/stop"
 ```
 
 For a fixed three-second test, use `POST /test` with `{"color":"RED"}`. A preview/test cannot override an active scan.
 
 ### Application events
 
-CABEK AI sends `POST /events` using the **control token**. Example:
+CABEK AI sends `POST /events` without credentials. Example:
 
 ```json
 {
@@ -71,7 +67,6 @@ States: `BOOTING`, `INITIALIZING`, `READY`, `SCANNING`, `COMPLETED`, `OFF`. `cap
 ## Responses and errors
 
 - `202`: accepted; the hardware may still be disconnected.
-- `401` / `403`: missing credentials / maintenance permission required.
 - `409`: capture conflict, invalid state transition, or unsupported effect.
 - `422`: invalid request data.
 - `503`: lighting service disabled.
@@ -81,3 +76,6 @@ States: `BOOTING`, `INITIALIZING`, `READY`, `SCANNING`, `COMPLETED`, `OFF`. `cap
 Use `GET /effects` for the authoritative effect names, defaults and parameter limits instead of copying stale parameter tables into client code.
 
 See [effects](lighting-effects.md) and [deployment](lighting-deployment.md).
+
+The lighting API listens on localhost. The development frontend lighting proxy
+also accepts local requests only, even when the rest of the frontend serves the LAN.

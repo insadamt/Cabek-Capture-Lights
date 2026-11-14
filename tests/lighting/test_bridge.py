@@ -68,8 +68,7 @@ class FirmwareSerial:
 
 def make_bridge():
     now = [0.0]
-    settings = LightingSettings(enabled=True, port="/dev/serial/by-id/test", token="c" * 32,
-                                maintenance_token="m" * 32, timeout=.01)
+    settings = LightingSettings(enabled=True, port="/dev/serial/by-id/test", timeout=.01)
     ports = []
 
     def factory(**kwargs):

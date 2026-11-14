@@ -1,14 +1,12 @@
-"""Expose authenticated lighting status/control and separate maintenance testing.
+"""Expose ordinary lighting endpoints while preserving lifecycle arbitration.
 
 Depends on the app-owned LightingService and existing structured error handlers;
-no lighting credential is shipped to React or accepted in a URL.
+manual previews cannot interrupt active capture.
 """
 
-import secrets
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict
 
 from lighting_api.errors import DossierError
@@ -31,24 +29,14 @@ class TestRequest(BaseModel):
     color: Literal["OFF", "RED", "BLUE", "GREEN", "WHITE"]
 
 
-bearer = HTTPBearer(auto_error=False)
-
-
-def authorize(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
-    settings = request.app.state.lighting.settings
-    if not settings.enabled:
+def require_enabled(request: Request):
+    if not request.app.state.lighting.settings.enabled:
         raise DossierError(503, "lighting_disabled", "Lighting control is disabled.")
-    supplied = credentials.credentials.encode("utf-8") if credentials else b""
-    control = secrets.compare_digest(supplied, settings.token.encode("utf-8"))
-    maintenance = secrets.compare_digest(supplied, settings.maintenance_token.encode("utf-8"))
-    if not (control or maintenance):
-        raise DossierError(401, "lighting_unauthorized", "A valid lighting bearer token is required.")
-    return maintenance
 
 
 router = APIRouter(prefix="/api/v1/lights", tags=["Local lighting"],
-                   dependencies=[Depends(authorize)], responses={
-                       code: {"model": ErrorResponse} for code in (401, 403, 409, 422, 503)
+                   dependencies=[Depends(require_enabled)], responses={
+                       code: {"model": ErrorResponse} for code in (409, 422, 503)
                    })
 
 
@@ -64,16 +52,14 @@ def set_state(payload: StateRequest, request: Request):
 
 
 @router.post("/test", status_code=202, response_model=LightingStatus)
-def test_color(payload: TestRequest, request: Request, maintenance: bool = Depends(authorize)):
-    if not maintenance:
-        raise DossierError(403, "lighting_maintenance_required", "A maintenance bearer token is required.")
+def test_color(payload: TestRequest, request: Request):
     request.app.state.lighting.state.start_test(payload.color)
     return request.app.state.lighting.status()
 
 
 @router.get("/capabilities")
-def get_capabilities(request: Request, maintenance: bool = Depends(authorize)):
-    return {**request.app.state.lighting.driver.get_capabilities(), "can_preview": maintenance}
+def get_capabilities(request: Request):
+    return {**request.app.state.lighting.driver.get_capabilities(), "can_preview": True}
 
 
 @router.get("/effects")
@@ -81,21 +67,14 @@ def get_effects(request: Request):
     return effect_catalog(request.app.state.lighting.driver.get_capabilities())
 
 
-def require_maintenance(maintenance):
-    if not maintenance:
-        raise DossierError(403, "lighting_maintenance_required", "A maintenance bearer token is required.")
-
-
 @router.post("/effects", status_code=202, response_model=LightingStatus)
-def start_effect(payload: EffectRequest, request: Request, maintenance: bool = Depends(authorize)):
-    require_maintenance(maintenance)
+def start_effect(payload: EffectRequest, request: Request):
     service = request.app.state.lighting
     service.engine.start_preview(payload, service.driver.get_capabilities())
     return service.status()
 
 
 @router.post("/stop", status_code=202, response_model=LightingStatus)
-def stop_effect(request: Request, payload: StopRequest | None = None, maintenance: bool = Depends(authorize)):
-    require_maintenance(maintenance)
+def stop_effect(request: Request, payload: StopRequest | None = None):
     request.app.state.lighting.engine.stop_preview()
     return request.app.state.lighting.status()

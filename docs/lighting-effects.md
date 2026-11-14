@@ -40,7 +40,7 @@ The existing analog RGB decoder changes the **whole strip together**. It cannot 
 
 ## Preview an effect
 
-Open CABEK AI's protected `/maintenance/lights` page, or use the [API](lighting-api.md). The panel shows which effects the connected hardware supports.
+Open CABEK AI's `/maintenance/lights` page, or use the [API](lighting-api.md). The panel shows which effects the connected hardware supports.
 
 Typical request:
 

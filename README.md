@@ -18,7 +18,7 @@ python3 -m venv .venv
 cp .env.example .env
 ```
 
-Edit `.env`: set **two different tokens of at least 32 characters**, verify `CABEK_LIGHTS_PORT` (prefer `/dev/serial/by-id/...`), and use `CABEK_LIGHTS_DRIVER=dmx_rgb` for the real strip. Then:
+Edit `.env`: verify `CABEK_LIGHTS_PORT` (prefer `/dev/serial/by-id/...`), and use `CABEK_LIGHTS_DRIVER=dmx_rgb` for the real strip. Then:
 
 ```sh
 .venv/bin/python -m lighting_api --port 8001
@@ -26,18 +26,18 @@ Edit `.env`: set **two different tokens of at least 32 characters**, verify `CAB
 
 Use one lighting service process. Close PlatformIO Serial Monitor and any other program using the ESP32 port.
 
-To inspect it, send an authenticated request:
+To inspect it, send a request:
 
 ```sh
-curl -H "Authorization: Bearer $CABEK_LIGHTS_TOKEN" http://127.0.0.1:8001/api/v1/lights/status
+curl http://127.0.0.1:8001/api/v1/lights/status
 ```
 
-CABEK AI runs separately and sends lifecycle events to this service. It needs `CABEK_LIGHTS_API_URL=http://127.0.0.1:8001` and the same control token.
+CABEK AI runs separately and sends lifecycle events to this service. It needs `CABEK_LIGHTS_API_URL=http://127.0.0.1:8001`.
 
 ## What works today
 
 - Fixed colors and global RGB effects on the **existing DMX strip**. Smooth effects require ESP32 firmware advertising `protocol=rgb8-v1`.
-- A protected maintenance page in CABEK AI at `/maintenance/lights` for previewing supported effects.
+- A maintenance page in CABEK AI at `/maintenance/lights` for previewing supported effects.
 - Progressive/chase/pixel effects **in simulation only**. The NAVIGATE 24V “Magic RGB” strip has not yet been verified or connected to a compatible pixel controller.
 
 ## Guides
@@ -54,3 +54,6 @@ For development checks:
 .venv/bin/python -m pytest -q
 pio run -e serial_only -e dmx_init -e esp32dev
 ```
+
+The lighting API listens on localhost. The development frontend lighting proxy
+also accepts local requests only, even when the rest of the frontend serves the LAN.

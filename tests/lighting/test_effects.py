@@ -17,8 +17,7 @@ from lighting_api.lighting_service import LightingService
 
 def simulated_service(**options):
     now = [0.0]
-    settings = LightingSettings(driver='simulated_pixels', enabled=True, token='c' * 32,
-                                maintenance_token='m' * 32, pixel_count=12, **options)
+    settings = LightingSettings(driver='simulated_pixels', enabled=True, pixel_count=12, **options)
     service = LightingService(settings, clock=lambda: now[0])
     service.state.transition('INITIALIZING')
     service.state.set_readiness(None)

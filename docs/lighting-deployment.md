@@ -22,7 +22,6 @@ Edit `/etc/cabek-lighting.env` and set:
 - `CABEK_LIGHTS_ENABLED=1`
 - `CABEK_LIGHTS_DRIVER=dmx_rgb`
 - `CABEK_LIGHTS_PORT=/dev/serial/by-id/<your-device>` (list devices with `ls -l /dev/serial/by-id/`)
-- Two **different** private tokens of at least 32 characters: `CABEK_LIGHTS_TOKEN` and `CABEK_LIGHTS_MAINTENANCE_TOKEN`
 
 Grant the `cabek` user access to the actual USB serial device group (often `dialout`). Confirm that `deploy/cabek-lighting.service` matches your paths and account.
 
@@ -44,18 +43,17 @@ In CABEK AI's **server-side** environment, configure:
 ```ini
 CABEK_LIGHTS_ENABLED=1
 CABEK_LIGHTS_API_URL=http://127.0.0.1:8001
-CABEK_LIGHTS_TOKEN=<same-control-token>
 ```
 
 CABEK AI then publishes startup, readiness and capture events to `POST /api/v1/lights/events`. Lighting outages must not block vehicle capture.
 
-For the frontend, use `VITE_LIGHTS_API_BASE_URL` pointing to the accessible lighting API or your authenticated gateway. **Never** use a remote browser's `127.0.0.1` for the tunnel PC, and never embed the maintenance token in `VITE_*` settings.
+For the frontend, use `VITE_LIGHTS_API_BASE_URL` pointing to the accessible lighting API or your gateway. Use the tunnel PC's actual address when accessing it from a remote browser.
 
-Operators can open `/maintenance/lights` and supply their maintenance token manually. Expose the API only through a trusted authenticated boundary. CORS alone is not access control.
+Open `/maintenance/lights` directly; no login or token is required.
 
 ## 3. Check the installation
 
-1. Start the lighting service and verify authenticated `/status` and `/capabilities` on port 8001.
+1. Start the lighting service and verify `/status` and `/capabilities` on port 8001.
 2. Start CABEK AI; check blue startup, white ready, red during capture, green on success, white after ten seconds.
 3. Verify manual previews cannot interrupt a scan.
 4. Disconnect/reconnect USB and restart either service; verify that the latest state recovers and no duplicate serial owner appears.
@@ -63,3 +61,6 @@ Operators can open `/maintenance/lights` and supply their maintenance token manu
 Do not mark an ESP32 firmware upgrade as accepted until the real decoder and lights are observed. Keep the known working firmware for rollback.
 
 See [API examples](lighting-api.md) and [effects/hardware limits](lighting-effects.md).
+
+The lighting API listens on localhost. The development frontend lighting proxy
+also accepts local requests only, even when the rest of the frontend serves the LAN.

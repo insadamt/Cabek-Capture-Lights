@@ -33,7 +33,7 @@ def create_app(settings=None, service=None):
     origins = [item.strip() for item in os.getenv('CABEK_LIGHTS_CORS_ORIGINS', '').split(',') if item.strip()]
     if origins:
         app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=['GET','POST'],
-                           allow_headers=['Authorization','Content-Type'])
+                           allow_headers=['Content-Type'])
     app.include_router(router)
     app.include_router(event_router)
     return app
