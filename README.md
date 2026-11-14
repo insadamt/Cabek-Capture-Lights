@@ -1,44 +1,89 @@
 # CABEK Tunnel Lights
 
-Standalone local RGB control: FastAPI → one animation worker → USB Serial → ESP32
-→ MAX485 → analog DMX512 RGB decoder. Depends on Python 3.11+, pyserial and USB
-access. CABEK AI is optional; there are no camera or readiness requirements.
+A small lighting controller for the exterior of the CABEK AI inspection tunnel. It receives HTTP commands and controls an RGB LED strip through an ESP32 and a DMX512 decoder.
 
-```sh
+The lighting service runs independently of CABEK AI. It does not need cameras, vehicle data or application readiness to accept a command.
+
+## Technology
+
+- Python 3.11+, FastAPI and pyserial
+- ESP32 DevKit V1 with PlatformIO firmware
+- MAX485, DMX512 RGB decoder and a conventional RGB strip
+
+## How it works
+
+```text
+CABEK AI or a local HTTP client
+            ↓
+       Lighting API
+            ↓
+      USB serial / ESP32
+            ↓
+      MAX485 / DMX512
+            ↓
+          RGB strip
+```
+
+One worker handles serial commands and animations. A new request replaces the current effect; OFF stops it.
+
+See [Architecture](docs/architecture.md) for the code layout.
+
+## Quick start
+
+```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-lighting.txt
 cp .env.example .env
-# Set CABEK_LIGHTS_PORT to your /dev/serial/by-id/... device.
+```
+
+Set `CABEK_LIGHTS_PORT` in `.env` to the ESP32's stable `/dev/serial/by-id/...` path, then start the service:
+
+```bash
 .venv/bin/python -m lighting_api --port 8001
 ```
 
-Keep one process and close Serial Monitor. The server binds to `127.0.0.1`.
-Do not publish unauthenticated hardware controls to the LAN or Internet.
+Only one process can use the USB serial port. Close Serial Monitor before starting the API.
 
-```sh
-curl -X POST http://127.0.0.1:8001/api/lights/set \
-  -H 'Content-Type: application/json' -d '{"color":"#FF0000"}'
+## API
+
+The service provides **two endpoints**, both on `http://127.0.0.1:8001`:
+
+```text
+POST /api/lights/set    Color or animation
+POST /api/lights/off    Stop and turn off
+```
+
+Turn the lights red:
+
+```bash
+curl -X POST http://127.0.0.1:8001/api/lights/set -H 'Content-Type: application/json' -d '{"color":"#FF0000"}'
+```
+
+Turn them off:
+
+```bash
 curl -X POST http://127.0.0.1:8001/api/lights/off
 ```
 
-Exactly two routes: `POST /api/lights/set` and `POST /api/lights/off`.
-New commands replace the active effect. Finite effects hold their final color;
-repeating effects continue until replaced or stopped. Animations/custom colors
-require RGB firmware; legacy full-strength colors remain available without it.
+See [API](docs/api.md) for parameters and [Effects](docs/effects.md) for animations.
 
-- [API reference and examples](docs/lighting-api.md)
-- [Hardware, firmware and manual checks](docs/lighting-effects.md)
-- [Local deployment and CABEK AI integration](docs/lighting-deployment.md)
-- [Technical journal](docs/technical-journal.md)
+## Tests
 
-Software checks use mocked firmware and a Linux pseudo-TTY, without touching USB:
-
-```sh
+```bash
 .venv/bin/pip install -r requirements-lighting-dev.txt
 .venv/bin/python -m pytest -q
-c++ -std=c++11 -Isrc tests/rgb_command_test.cpp -o /tmp/cabek-rgb-test
-/tmp/cabek-rgb-test
+pio run -e serial_only -e dmx_init -e esp32dev
 ```
 
-Firmware is preserved. To build all diagnostic stages when PlatformIO is installed:
-`pio run -e serial_only -e dmx_init -e esp32dev`. Flashing is a separate manual step.
+The automated tests do not verify the physical LEDs. Flashing firmware is a separate, manual step.
+
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [API](docs/api.md)
+- [Effects](docs/effects.md)
+- [Hardware](docs/hardware.md)
+- [Deployment](docs/deployment.md)
+- [Technical journal](docs/technical-journal.md)
+
+The HTTP service has no authentication and binds to localhost by default. **Do not expose it directly to the LAN or Internet.**
