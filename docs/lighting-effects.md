@@ -51,6 +51,6 @@ Software tests cannot confirm USB reset behavior, electrical DMX or visible colo
 - [ ] On legacy firmware, confirm five legacy outputs work and smooth effects return 501.
 - [ ] Run CABEK AI: startup → white → red scan pulses → green → white after ten seconds.
 - [ ] Begin another capture during green; check that the previous timer cannot overwrite red.
-- [ ] Open maintenance locally and control lights without a readiness gate. Confirm a remote LAN client cannot use the Vite lighting proxy.
+- [ ] Confirm the frontend has no lighting controls or requests to port 8001; refresh/close it during a capture and verify backend lighting continues.
 
 Historical firmware investigations remain in the [journal archive](archive/technical-journal-2026-11.md).

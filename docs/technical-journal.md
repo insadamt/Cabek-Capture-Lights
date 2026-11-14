@@ -49,3 +49,13 @@ For instructions, see [deployment](lighting-deployment.md), [API](lighting-api.m
 
 The earlier lifecycle/preview and simulation descriptions above are historical;
 the current contract is the [minimal API reference](lighting-api.md).
+
+## 14 Nov 2026 — Backend-only application lighting
+
+- Removed the frontend lighting maintenance page, HTTP client, public service URL
+  and Vite lighting proxy. CABEK AI already owns startup, capture, completion timing
+  and shutdown commands; no browser lighting endpoints were added to CABEK AI.
+- The independent service retains its two local diagnostic endpoints. Hardware
+  firmware and the backend effect sequence are unchanged.
+- Verification: 20 backend lighting/capture tests, 42 frontend routing/capture
+  tests and the production build passed. Physical lights were not tested.
