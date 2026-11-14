@@ -1,23 +1,41 @@
-# CABEK ESP32 DMX lighting
+# CABEK ESP32 lighting service and firmware
 
-This repository preserves the working ESP32/MAX485 DMX transmitter and provides
-RGB protocol extensions and Linux deployment for automatic lighting effects.
-It depends on
-PlatformIO and the sibling FastAPI backend for API/state/serial ownership.
+This repository owns the lighting REST API, effects engine, persistent USB serial
+connection and ESP32/MAX485 firmware. It depends on Python/FastAPI/pyserial for the
+host service and PlatformIO for firmware. CABEK AI publishes lifecycle events as
+an HTTP client; AutoEstimate does not host or control these APIs.
 
-Firmware console: 115200 baud; commands `0` OFF, `1` RED, `2` BLUE, `3` GREEN,
-`4` RGB WHITE, `?` STATUS. GPIO wiring and UART2 DMX 250000-baud 8N2, address 001,
-RGB channels 1–3 remain unchanged. Firmware starts OFF and continuously sends DMX.
-Extended `R r g b\n` commands
-add 8-bit RGB after capability negotiation; existing commands remain compatible.
+The lighting server runs separately on **http://127.0.0.1:8001**. Endpoints:
+`/api/v1/lights/status`, `/capabilities`, `/effects`, `/stop`, `/state`, `/test`
+and the authenticated application lifecycle `/events` endpoint.
 
-- [Effects, firmware migration and manual acceptance](docs/lighting-effects.md)
-- [Lighting deployment and manual checks](docs/lighting-deployment.md)
-- [Backend API contract](../cabek_ai_global/docs/lighting-api.md)
-- [Firmware diagnostics and development journal](docs/technical-journal.md)
-- [Example automatic startup unit](deploy/cabek-tunnel.service)
+```sh
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-lighting.txt
+cp .env.example .env
+# Set private control/maintenance tokens and the verified serial port in .env.
+.venv/bin/python -m lighting_api --port 8001
+```
 
-Normal operation uses the backend's persistent serial bridge. Close it before
-running serial diagnostics or PlatformIO Serial Monitor. New smooth effects require
-firmware advertising `protocol=rgb8-v1`; legacy
-firmware keeps its fixed-color lifecycle. See the migration guide before flashing.
+Use one server process and close serial monitors before starting it. The service
+loads this repository's `.env`; environment variables take precedence. CABEK AI
+runs separately, with `CABEK_LIGHTS_ENABLED=1`,
+`CABEK_LIGHTS_API_URL=http://127.0.0.1:8001` and the matching control token.
+The frontend maintenance panel uses `VITE_LIGHTS_API_BASE_URL` and a manually
+entered maintenance token. Application refreshes never restart lifecycle effects.
+
+Firmware wiring remains TX17, DE25, /RE26; DMX is UART2 250000 baud 8N2, address
+001 and RGB slots 1–3. Console commands 0–4 and `?` remain compatible. Negotiated
+`R r g b\n` packets add global RGB. Physical pixel hardware remains unverified;
+progressive effects run only with the explicit memory simulation driver.
+
+- [Lighting API and curl examples](docs/lighting-api.md)
+- [Effects and firmware migration/manual checklist](docs/lighting-effects.md)
+- [Host deployment](docs/lighting-deployment.md)
+- [Technical journal](docs/technical-journal.md)
+
+```sh
+.venv/bin/pip install -r requirements-lighting-dev.txt
+.venv/bin/python -m pytest
+pio run -e serial_only -e dmx_init -e esp32dev
+```

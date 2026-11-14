@@ -2,12 +2,12 @@
 
 This guide explains the RGB protocol extension, compatible deployment and manual
 acceptance of the advanced effects engine. It depends on the existing ESP32/MAX485
-wiring, PlatformIO, pyserial, and the sibling FastAPI backend and React application.
-The API reference is [lighting-api.md](../../cabek_ai_global/docs/lighting-api.md).
+wiring, PlatformIO, pyserial, and this repository’s standalone FastAPI service and the React application.
+The API reference is [lighting-api.md](lighting-api.md).
 
 ## What changed
 
-The existing backend state manager, persistent serial owner, readiness checks,
+The relocated lighting state manager, persistent serial owner, readiness checks,
 credential boundary and capture hooks are extended with a pure effect renderer,
 a hardware driver interface and memory-only zone simulation. HTTP handlers never
 render in background threads of their own or wait for hardware. Rendering uses
@@ -56,7 +56,7 @@ firmware stays OFF because it cannot express a reduced output.
 
 ## Build and migrate
 
-1. Stop the backend/other serial owner and retain the known working binary and
+1. Stop the lighting server/other serial owner and retain the known working binary and
    hardware configuration. Existing ignored `.rollback/` evidence is local only;
    copy backups separately before moving the project. Do not erase the whole flash.
 2. Build without uploading:
@@ -84,7 +84,7 @@ firmware stays OFF because it cannot express a reduced output.
    checks resets/heap and finishes OFF. Console tests establish firmware behavior;
    independently observe the strips and measure RS485 timing before acceptance.
 
-4. Close the tester and restart the updated backend with existing credentials and
+4. Close the tester and restart the standalone lighting server with existing credentials and
    `CABEK_LIGHTS_DRIVER=dmx_rgb`, `CABEK_LIGHTS_UPDATE_HZ=15`. Read `/capabilities`;
    smooth RGB must be true only after `protocol=rgb8-v1` was validated. Missing USB
    must remain honest disconnected/unconfirmed status without blocking capture.
@@ -134,7 +134,7 @@ software channel limits; they are not measured electrical power protection.
 Run the existing suites and the new deterministic tests:
 
 ```sh
-# In cabek_ai_global, with requirements-api-dev.txt installed:
+# In cabek-esp32, with requirements-lighting-dev.txt installed:
 python -m pytest tests -q
 # In Cabek Frontend, with its existing public API base configuration:
 npm test
@@ -147,7 +147,7 @@ ceilings, cancellation, replacement, expiry and capture priority with mock time.
 `test_rgb_protocol.py` checks negotiated RGB, bad acknowledgments, deduplication,
 rate limits and latest-state replay. Existing tests retain legacy commands,
 pseudo-TTY reconnection, readiness/real capture hooks, failures and shutdown.
-`tests/api/test_lighting_effects.py` checks auth, strict parameters, capabilities,
+`tests/lighting/test_http.py` checks auth, strict parameters, capabilities,
 repeated/concurrent requests and scan conflicts. Frontend unit tests check read-only
 panel loading, header credentials, safe redirects and supported payload fields.
 No Playwright or browser automation is required or used.
@@ -195,3 +195,12 @@ No Playwright or browser automation is required or used.
 A serial acknowledgment cannot prove visible color, smoothness or electrical
 waveforms. Unplugged hardware may retain its last output; forced process exit
 cannot guarantee OFF because the preserved firmware has no host-loss watchdog.
+
+
+## Current service placement
+
+All lighting endpoints, rendering and serial ownership now live in
+`cabek-esp32/lighting_api`. Run `python -m lighting_api --port 8001` here.
+CABEK AI sends lifecycle snapshots using `CABEK_LIGHTS_API_URL`; it exposes no
+lighting routes. The frontend uses its separate `VITE_LIGHTS_API_BASE_URL`.
+Follow [the deployment guide](lighting-deployment.md) and [API reference](lighting-api.md).

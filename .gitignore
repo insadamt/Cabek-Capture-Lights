@@ -12,3 +12,7 @@ __pycache__/
 .venv/
 .claude/
 .cursor/
+
+# Standalone host-service secrets and test caches.
+.env
+.pytest_cache/

@@ -1,0 +1,22 @@
+# Starts the standalone lighting API and sole serial owner.
+# Depends on /opt/cabek-esp32/.venv, the cabek account and private service settings.
+[Unit]
+Description=CABEK ESP32 lighting API
+After=network-online.target
+
+[Service]
+Type=simple
+User=cabek
+WorkingDirectory=/opt/cabek-esp32
+EnvironmentFile=/etc/cabek-lighting.env
+ExecStart=/opt/cabek-esp32/.venv/bin/python -m lighting_api --port 8001
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

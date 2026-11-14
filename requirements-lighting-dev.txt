@@ -1,0 +1,4 @@
+# Tests for the standalone service; depends on requirements-lighting.txt.
+-r requirements-lighting.txt
+pytest>=8,<10
+httpx>=0.27,<1

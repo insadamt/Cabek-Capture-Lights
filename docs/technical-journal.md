@@ -300,7 +300,7 @@ ESP32 integration commit.
 ### Manual acceptance and operational limits
 
 Follow the complete [Linux deployment and hardware checklist](lighting-deployment.md)
-and the [backend curl procedure](../../cabek_ai_global/docs/lighting-api.md).
+and the [backend curl procedure](lighting-api.md).
 At minimum release the current serial client, observe all five strip outputs,
 check startup readiness, complete/fail/interrupt captures, start another capture
 during green, test missing/bad/maintenance credentials, unplug/reconnect USB,
@@ -399,7 +399,7 @@ and capture/UI/data changes are excluded from the three lighting commits.
 
 - [Effects architecture, firmware migration and complete manual checklist](lighting-effects.md)
 - [Linux service configuration and deployment checks](lighting-deployment.md)
-- [API contract, effect parameters, examples and maintenance controls](../../cabek_ai_global/docs/lighting-api.md)
+- [API contract, effect parameters, examples and maintenance controls](lighting-api.md)
 
 Before deployment, flash only the production image during maintenance, rerun legacy
 and RGB console tests, observe all A–L effects, exercise capture priorities and the
@@ -419,3 +419,37 @@ These commit subjects also serve as commit message suggestions for follow-on
 integration. Only lighting paths are included; preexisting stable-port changes in
 `platformio.ini`/`scripts/test_serial.py` and unrelated backend/frontend changes
 remain in their working trees.
+
+## 2026-11-14 — Move lighting API into the ESP32 repository
+
+The requested service boundary is now explicit: `cabek-esp32/lighting_api` owns
+all lighting endpoints, effect rendering, hardware drivers and persistent serial
+I/O. `python -m lighting_api --port 8001` launches it independently, with its own
+requirements, private environment file and `deploy/cabek-lighting.service`.
+AutoEstimate remains unchanged. The previous embedded CABEK lighting routes,
+engine, drivers and serial tests were removed from the application repository;
+the tests and API reference were relocated here.
+
+CABEK AI retains only its real application readiness probe and a bounded HTTP
+lifecycle client. Its capture hooks publish the latest state, capture identity,
+sequence and monotonic elapsed time to authenticated `/api/v1/lights/events`.
+Repeated heartbeats preserve phases and completion expiry. Slow/unavailable
+lighting HTTP cannot block capture; reconnection sends the latest snapshot rather
+than an obsolete event queue. Graceful application shutdown publishes OFF best
+effort; forced exit/network loss retains the last state until client recovery.
+The frontend now uses `VITE_LIGHTS_API_BASE_URL`; Vite routes lighting to port 8001
+before forwarding ordinary API calls to CABEK. Maintenance tokens remain in memory.
+
+Validation: **60 standalone lighting tests passed**, **32 focused application
+checks passed**, and **619 frontend tests plus the production build passed**.
+An in-memory cross-repository HTTP contract check verified READY → SCANNING →
+COMPLETED → OFF snapshots. The full application run had **297 passed and one
+previously documented intermittent capture-retry failure** in the user's unrelated
+changes. No Playwright, firmware upload, physical USB access or LED observation
+was performed. Firmware sources and wiring were not changed by this relocation.
+
+Manual acceptance: start port 8001 independently, confirm CABEK's OpenAPI contains
+no lighting paths, configure the application HTTP URL/control token, observe real
+capture events and ten-second completion recovery, exercise the maintenance panel,
+and restart each process independently. Repeat authorization, USB reconnect,
+unsupported-zone and physical observation checks in the updated deployment guide.
