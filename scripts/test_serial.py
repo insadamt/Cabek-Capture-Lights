@@ -164,7 +164,10 @@ def run(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", default="/dev/ttyUSB0")
+    parser.add_argument(
+        "--port",
+        default="/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0",
+    )
     parser.add_argument("--mode", choices=("serial_only", "dmx_init", "dmx_tx"), required=True)
     parser.add_argument("--firmware", type=Path, required=True)
     parser.add_argument("--log", type=Path, required=True)
