@@ -1,82 +1,65 @@
-# Standalone lighting service deployment
+# Deploy on the tunnel PC
 
-This guide deploys the lighting API from **cabek-esp32** independently of CABEK AI.
-It depends on Python, FastAPI, pyserial, systemd and the existing ESP32 firmware.
-The application publishes lifecycle snapshots to this service; AutoEstimate is unchanged.
+The lighting service runs **separately** from CABEK AI on the same trusted machine:
 
-## Lighting server (port 8001)
+- Lighting API: `127.0.0.1:8001`
+- CABEK AI application: normally `127.0.0.1:8000`
+- Only the lighting service may open the ESP32 USB serial port.
 
-1. Install this repository under `/opt/cabek-esp32`. Create its Python virtual
-   environment and install `requirements-lighting.txt`.
-2. Copy `.env.example` to `/etc/cabek-lighting.env` with root ownership and mode
-   0600. Set `CABEK_LIGHTS_ENABLED=1`, the verified ESP32 by-id port and distinct
-   control/maintenance tokens of at least 32 characters. Use `dmx_rgb` for physical
-   hardware; `simulated_pixels` opens no serial port.
-3. Give the `cabek` service account the actual serial device's group access
-   (`dialout` on many Ubuntu installs). Close serial monitors and other USB owners.
-4. Review paths/account in `deploy/cabek-lighting.service`, then install it:
+## 1. Install the lighting service
+
+These instructions assume Ubuntu, a `cabek` service user and this repository at `/opt/cabek-esp32`:
+
+```sh
+cd /opt/cabek-esp32
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-lighting.txt
+sudo install -o root -g root -m 0600 .env.example /etc/cabek-lighting.env
+```
+
+Edit `/etc/cabek-lighting.env` and set:
+
+- `CABEK_LIGHTS_ENABLED=1`
+- `CABEK_LIGHTS_DRIVER=dmx_rgb`
+- `CABEK_LIGHTS_PORT=/dev/serial/by-id/<your-device>` (list devices with `ls -l /dev/serial/by-id/`)
+- Two **different** private tokens of at least 32 characters: `CABEK_LIGHTS_TOKEN` and `CABEK_LIGHTS_MAINTENANCE_TOKEN`
+
+Grant the `cabek` user access to the actual USB serial device group (often `dialout`). Confirm that `deploy/cabek-lighting.service` matches your paths and account.
 
 ```sh
 sudo install -m 0644 deploy/cabek-lighting.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now cabek-lighting
-journalctl -u cabek-lighting -f
+sudo systemctl status cabek-lighting
 ```
 
-For development use `.env` in this repository and `python -m lighting_api --port 8001`.
-Only one process may own the serial port. Never run a second embedded USB bridge.
-Firmware and wiring remain unchanged by the service relocation. New smooth RGB
-requires `protocol=rgb8-v1`; use the firmware migration checklist before uploading.
-This task does not install services or upload/reset hardware.
+Logs: `journalctl -u cabek-lighting -f`. Do not run PlatformIO Serial Monitor while this service owns the port. Run exactly one service process, without reload/multiple workers.
 
-## CABEK application (separate process, normally port 8000)
+For local development, use `cp .env.example .env`, configure it, then run `.venv/bin/python -m lighting_api --port 8001`.
 
-Keep model, capture and storage configuration in the existing application environment.
-Replace its serial/driver/maintenance configuration with the HTTP client settings:
+## 2. Connect CABEK AI
+
+In CABEK AI's **server-side** environment, configure:
 
 ```ini
 CABEK_LIGHTS_ENABLED=1
 CABEK_LIGHTS_API_URL=http://127.0.0.1:8001
-CABEK_LIGHTS_TOKEN=<same-control-token-as-lighting-service>
-CABEK_LIGHTS_TIMEOUT=1
-CABEK_LIGHTS_HEALTH_SECONDS=5
+CABEK_LIGHTS_TOKEN=<same-control-token>
 ```
 
-Start CABEK AI as usual (`python -m api --port 8000`). Its readiness checks and
-capture hooks publish authenticated state snapshots on one bounded HTTP worker.
-Unavailable lighting cannot block capture requests. Snapshots retry with the latest
-state, active capture identity and elapsed phase; obsolete events are not queued.
-Start/restart the lighting service independently: CABEK's next heartbeat resynchronizes
-it. A client process shutdown sends OFF best effort. If the client is killed or the
-network is unavailable, the service retains the last state until a new snapshot.
+CABEK AI then publishes startup, readiness and capture events to `POST /api/v1/lights/events`. Lighting outages must not block vehicle capture.
 
-`deploy/cabek-tunnel.service` remains an application unit example; it no longer
-owns serial or the lighting API. Keep both services on the trusted local machine.
+For the frontend, use `VITE_LIGHTS_API_BASE_URL` pointing to the accessible lighting API or your authenticated gateway. **Never** use a remote browser's `127.0.0.1` for the tunnel PC, and never embed the maintenance token in `VITE_*` settings.
 
-## Frontend
+Operators can open `/maintenance/lights` and supply their maintenance token manually. Expose the API only through a trusted authenticated boundary. CORS alone is not access control.
 
-Set `VITE_LIGHTS_API_BASE_URL=http://127.0.0.1:8001` independently of
-`VITE_API_BASE_URL`. In development, `/api/v1/lights` is proxied to the lighting
-server before other `/api` paths are proxied to CABEK. In production, configure the
-actual lighting URL and `CABEK_LIGHTS_CORS_ORIGINS` with the frontend origin, or route
-that prefix to port 8001 through the existing authenticated gateway. A remote
-browser's `127.0.0.1` is its own machine: set the real gateway URL for remote access.
+## 3. Check the installation
 
-Open `/maintenance/lights` and enter the maintenance token manually. Never place
-tokens in Vite environment variables or browser storage. Ordinary users do not
-receive maintenance credentials. Protect all existing capture routes separately.
+1. Start the lighting service and verify authenticated `/status` and `/capabilities` on port 8001.
+2. Start CABEK AI; check blue startup, white ready, red during capture, green on success, white after ten seconds.
+3. Verify manual previews cannot interrupt a scan.
+4. Disconnect/reconnect USB and restart either service; verify that the latest state recovers and no duplicate serial owner appears.
 
-## Manual checks
+Do not mark an ESP32 firmware upgrade as accepted until the real decoder and lights are observed. Keep the known working firmware for rollback.
 
-- [ ] Start the lighting API independently and inspect authenticated `/status`,
-  `/capabilities` and `/effects` on port 8001. CABEK's port must return no lighting routes.
-- [ ] Start CABEK AI; observe boot/initialization/readiness and actual capture
-  events arriving through `/events`. Refreshing the frontend must not replay boot.
-- [ ] Preview effects from the maintenance panel. Start a scan and verify it
-  cancels previews; completion holds green for ten seconds, then returns to white.
-- [ ] Stop/restart either service; verify latest-state/phase recovery without
-  duplicate timers or serial owners. Stop CABEK normally and verify best-effort OFF.
-- [ ] Test missing/bad credentials, capability restrictions, USB reconnection and
-  M–P simulation. Observe real colors/smoothness and run the full hardware soak.
-
-See [the API contract](lighting-api.md) and [firmware/effect checklist](lighting-effects.md).
+See [API examples](lighting-api.md) and [effects/hardware limits](lighting-effects.md).
