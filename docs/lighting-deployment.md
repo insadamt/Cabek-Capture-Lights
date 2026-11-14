@@ -2,14 +2,15 @@
 
 This guide installs automatic backend-owned ESP32 lighting on the Linux tunnel PC.
 It depends on the sibling `cabek_ai_global` FastAPI application, its documented
-capture provider, pyserial, systemd and the unchanged `cabek-dmx-v1` firmware.
+capture provider, pyserial, systemd and compatible `cabek-dmx-v1` firmware. See [effects and firmware migration](lighting-effects.md).
 
 ## Architecture and compatibility
 
 React's existing capture request → FastAPI CaptureService → single persistent
 serial worker → ESP32 → UART2/MAX485 → DMX decoder → RGB strips.
 The backend owns startup, capture, completion and maintenance arbitration. It
-reuses the production console protocol; there is no new firmware requirement.
+reuses the production console protocol. Smooth effects require the negotiated
+`rgb8-v1` extension; legacy firmware retains fixed-color lifecycle behavior.
 GPIO wiring, 250000-baud 8N2 DMX, address 001, and RGB channels 1–3 are unchanged.
 White uses RGB 255/255/255; the disconnected W wire stays disconnected.
 
@@ -51,6 +52,10 @@ CABEK_LIGHTS_MAINTENANCE_TOKEN=<independent-maintenance-secret>
 CABEK_LIGHTS_TIMEOUT=1
 CABEK_LIGHTS_RECONNECT_SECONDS=2
 CABEK_LIGHTS_HEALTH_SECONDS=5
+CABEK_LIGHTS_DRIVER=dmx_rgb
+CABEK_LIGHTS_UPDATE_HZ=15
+CABEK_LIGHTS_PREVIEW_SECONDS=30
+CABEK_LIGHTS_BRIGHTNESS_LIMIT=100
 ```
 
 Current application capture is still the existing mock photo provider; this
@@ -95,7 +100,9 @@ reconnection. Device restarts/status regressions also trigger reconnect. Status
 separates desired RGB, historical firmware/last command and current connection;
 serial acknowledgment does not establish visible LED color.
 
-Capture owns red until all required originals are saved and validated. Failure
+With RGB-capable firmware, Target Lock and red pulses replace fixed red;
+failed captures use amber warning and graceful shutdown fades through dim blue.
+Legacy firmware retains the original fixed colors. Capture owns lighting until all required originals are saved and validated. Failure
 or shutdown interruption never enters green. Completion holds green for 10 seconds
 and returns to white only if application health still permits READY. A new capture
 cancels that timer. Graceful service shutdown attempts OFF. An unplugged ESP32 or
@@ -109,14 +116,14 @@ counters and zero errors are checked by periodic firmware status queries.
 
 - [ ] Check the ESP32 device identity and permissions; enable/restart the service
   on the tunnel PC and confirm it starts automatically after a host reboot.
-- [ ] Observe blinking blue while the launcher is still booting, solid blue during
-  initialization and white only after actual readiness passes. Very fast startup
+- [ ] Observe blue awakening (legacy blink) while booting, blue breathing (legacy
+  solid blue) during initialization and white only after actual readiness passes. Very fast startup
   may make BOOTING brief; do not insert a fake delay to make it visible.
 - [ ] Remove a required dependency/sample/storage permission and verify the state
   remains INITIALIZING; repair it and confirm automatic readiness recovery.
-- [ ] In idle READY, use the maintenance API for RED/BLUE/GREEN/WHITE/OFF. Observe
+- [ ] In idle READY, use the maintenance API for RED/BLUE/GREEN/WHITE/OFF and the protected effects panel. Observe
   the actual strips and RGB white; verify automatic restoration after 3 seconds.
-- [ ] Start capture from React. Confirm red for all photo delivery, green only on
+- [ ] Start capture from React. Confirm Target Lock/red pulses (legacy red) during photo delivery, green only on
   successful photo completion, then white after 10 seconds. Navigation/refresh
   must not restart BOOTING or extend completion.
 - [ ] Begin another capture during green; confirm red persists beyond the old
@@ -133,6 +140,9 @@ counters and zero errors are checked by periodic firmware status queries.
   return 422. Verify deployment does not expose unauthenticated capture routes.
 - [ ] Stop the systemd service normally and observe OFF. Run a longer hardware
   soak for readable serial status, increasing DMX frames and zero errors.
+
+Use the [advanced effect acceptance checklist](lighting-effects.md) for all effects,
+capability restrictions and simulation.
 
 Physical LED appearance, real USB removal, power resets and installed systemd
 startup require observation on the actual tunnel hardware.

@@ -314,3 +314,108 @@ a firmware host-loss watchdog. The existing firmware was intentionally preserved
 The current camera provider is still simulated; this change adds lighting, not
 physical camera drivers. Public access requires authenticated protection for the
 whole capture API as well as the new lighting endpoints.
+
+## 2026-11-14 — Advanced effects engine and negotiated RGB output
+
+This combined technical report/journal records the major effects architecture,
+compatibility decision and validation. It depends on the FastAPI lifecycle owner,
+React maintenance route and backward-compatible firmware RGB extension. API and
+operator documentation remains in each relevant repository; sibling repository
+instructions prohibit separate reports or journal files there.
+
+### Audit and implementation decisions
+
+The audit found an existing six-state lighting manager, capture hooks, authenticated
+routes, exclusive persistent serial transport, readiness worker and reconnect
+health validation. Those remain the foundation. Firmware only accepted five fixed
+colors, so smooth arbitrary RGB required an advertised extension rather than
+pretending the old firmware could animate custom colors. `protocol=rgb8-v1` adds
+bounded `R r g b` packets while keeping commands 0–4, `?`, firmware version,
+DMX sender, wiring, timing configuration and address/channel mapping compatible.
+Timeout/overflow packets drain through newline so payload digits cannot select
+legacy colors. No new firmware library, task or dynamically allocated parser
+buffer was introduced.
+
+The backend now separates pure global/zone renderers, one-effect arbitration and
+a synchronous driver interface inside the existing hardware worker. Monotonic
+elapsed time determines output; a default 15 Hz ceiling, I/O-aware scheduling,
+quantization and duplicate suppression bound serial traffic. No per-effect workers,
+queues or timers are created. Lifecycle revisions invalidate previews, authoritative
+capture ownership wins, repeated identical previews do not restart or extend their
+cutoff, and the original 10-second completion deadline cancels on new capture.
+Shutdown allows a bounded fade before the existing final best-effort OFF.
+
+A–L render on confirmed global RGB hardware. M–P require independent logical zones
+and currently run only through `simulated_pixels`. The simulation supports zone
+count/mapping, direction, color order and output ceilings without asserting an
+unverified physical controller protocol or individual LED addressability. The 24V
+NAVIGATE strip remains unverified and no WS2811/pixel hardware driver is enabled.
+
+The existing status/state/test API now also exposes capabilities, effect metadata,
+start and stop. Maintenance writes require the separate credential and idle READY;
+strict effect-specific schemas reject irrelevant/invalid parameters. Desired frames,
+current driver acknowledgment, historical firmware and simulation are distinct.
+The opt-in `/maintenance/lights` React panel verifies maintenance permission before
+showing controls, retains its token only in memory and performs read-only refreshes.
+The whole capture API still needs its existing trusted deployment boundary.
+
+### Verification and investigation
+
+The original backend working-tree baseline passed 322 tests. Expanded lighting
+coverage verifies all A–P renderers, easing/interpolation, final frames, brightness,
+mock-time expiry, rapid/repeated/concurrent requests, capture priority, lifecycle
+completion/new-capture cancellation, warning/shutdown, capability rejection and
+simulated mapping. Existing legacy, pseudo-TTY, capture and readiness checks remain.
+A reconnect test exposed a frame deadline that could suppress immediate replay;
+reconnection now invalidates that deadline. A reconnect handshake terminates a partial RGB packet and discards only recognized
+stale RGB responses before firmware status validation. Additional regression checks keep
+acknowledgment types valid when switching simulated zone output to global RGB.
+
+Final isolated commit contents: **338 backend tests passed** and **619 frontend
+tests passed across 76 files**; the isolated TypeScript/Vite build passed. The
+working frontend passed **667 tests across 82 files** and its production build.
+The working backend's final run passed **362 tests with one intermittent existing
+capture retry failure**; all **68 lighting/API tests** passed. Vite retains its preexisting large-chunk advisory. PlatformIO built
+`serial_only`, `dmx_init` and `esp32dev`; the native C++ parser test passed with
+`-Wall -Wextra -Werror`. Python compilation and whitespace checks were also run.
+No Playwright or browser automation was used.
+
+Working-tree runs intermittently observed an existing capture retry's historical
+failed status before its replacement asynchronous analysis started:
+`tests/api/test_expertise_capture.py::test_missing_legacy_originals_offer_capture_and_do_not_poison_the_next_scan[True]`.
+That unmodified test passed in isolation, and an earlier complete working-tree run
+also passed. It belongs to the user's preexisting uncommitted capture changes;
+the isolated lighting release passes its entire suite. The remaining race is
+reported without changing or committing unrelated capture implementation/tests.
+
+The execution environment has no `/dev/serial/by-id` device, including a host-level
+check. No upload, board reset, USB hotplug or physical LED observation occurred.
+The new `scripts/test_rgb_serial.py` is supplied for operator hardware acceptance,
+including legacy/custom colors, malformed/timeout packets, DMX progress and heap.
+Existing device firmware and physical wiring are preserved. Preexisting stable-port
+and capture/UI/data changes are excluded from the three lighting commits.
+
+### Documentation and manual acceptance
+
+- [Effects architecture, firmware migration and complete manual checklist](lighting-effects.md)
+- [Linux service configuration and deployment checks](lighting-deployment.md)
+- [API contract, effect parameters, examples and maintenance controls](../../cabek_ai_global/docs/lighting-api.md)
+
+Before deployment, flash only the production image during maintenance, rerun legacy
+and RGB console tests, observe all A–L effects, exercise capture priorities and the
+10-second hold, unplug/reconnect/reset hardware, verify simulated M–P remain
+unavailable on DMX RGB, and run a sustained physical soak. Electrical timing and
+visible colors require direct measurement/observation. Disconnected hardware or
+forced host termination cannot guarantee OFF without a device host-loss watchdog.
+
+
+### Consolidated lighting commits
+
+- Backend `7f72141`: `feat(lighting): add asynchronous effects engine and capability-aware API`.
+- Frontend `138b38e`: `feat(lighting): add protected maintenance previews and zone simulation`.
+- Firmware changes in this commit: `feat(firmware): add compatible RGB commands for lighting effects`.
+
+These commit subjects also serve as commit message suggestions for follow-on
+integration. Only lighting paths are included; preexisting stable-port changes in
+`platformio.ini`/`scripts/test_serial.py` and unrelated backend/frontend changes
+remain in their working trees.

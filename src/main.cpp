@@ -1,9 +1,10 @@
 // Terminal-controlled RGB lighting and staged UART diagnostics for CABEK AI.
-// Depends on Arduino Serial0, ESP32 clock/reset APIs, and the UART2 DMX sender.
+// Depends on Arduino Serial0, bounded RGB parsing, ESP32 clock/reset APIs and UART2 DMX.
 #include <Arduino.h>
 #include <esp_system.h>
 
 #include "dmx_output.h"
+#include "rgb_command.h"
 
 #ifndef CABEK_DMX_STAGE
 #define CABEK_DMX_STAGE 2
@@ -20,11 +21,13 @@ uint8_t selectedRed = 0;
 uint8_t selectedGreen = 0;
 uint8_t selectedBlue = 0;
 bool outputHealthy = true;
+lighting::RgbCommand rgbCommand;
+uint32_t lastRgbByteAt = 0;
 
 void printStatus() {
     Serial0.printf(
         "STATUS firmware=%s sketch=%s mode=%s command=%c rgb=%u,%u,%u "
-        "frames=%lu errors=%lu heap=%lu min_heap=%lu uptime_ms=%lu "
+        "protocol=rgb8-v1 frames=%lu errors=%lu heap=%lu min_heap=%lu uptime_ms=%lu "
         "uart0_baud=%lu uart2_baud=%lu xtal_mhz=%u reset=%u\n",
         kFirmwareVersion, ESP.getSketchMD5().c_str(), kMode, selectedCommand,
         selectedRed, selectedGreen, selectedBlue,
@@ -38,7 +41,41 @@ void printStatus() {
         static_cast<unsigned>(esp_reset_reason()));
 }
 
+// ============================================================
+// Extended packets never leak their digits into legacy commands.
+// ============================================================
+void receiveRgbByte(char character) {
+    uint8_t channels[3] = {};
+    bool complete = false;
+    lastRgbByteAt = millis();
+    const bool valid = rgbCommand.append(character, channels, complete);
+    if (!complete || rgbCommand.expired()) return;
+    if (!valid) {
+        Serial0.println("ERR RGB: use R <0-255> <0-255> <0-255>");
+        return;
+    }
+    if (!outputHealthy) {
+        Serial0.println("ERR DMX unavailable: reset after checking diagnostics");
+        return;
+    }
+    selectedCommand = 'R';
+    selectedRed = channels[0];
+    selectedGreen = channels[1];
+    selectedBlue = channels[2];
+    dmx::setRgb(selectedRed, selectedGreen, selectedBlue);
+    Serial0.printf("OK R RGB %u %u %u\n", selectedRed, selectedGreen, selectedBlue);
+}
+
 void applyCommand(char command) {
+    if (rgbCommand.active()) {
+        receiveRgbByte(command);
+        return;
+    }
+    if (command == 'R') {
+        rgbCommand.begin();
+        lastRgbByteAt = millis();
+        return;
+    }
     uint8_t red = 0;
     uint8_t green = 0;
     uint8_t blue = 0;
@@ -89,6 +126,11 @@ void setup() {
 }
 
 void loop() {
+    if (rgbCommand.active() && !rgbCommand.expired() && static_cast<uint32_t>(millis() - lastRgbByteAt) > 250) {
+        // Drain to newline after timeout so delayed payload digits cannot select legacy colors.
+        rgbCommand.expire();
+        Serial0.println("ERR RGB timeout");
+    }
     // Bound input work so a pasted command stream cannot starve DMX refresh.
     for (unsigned processed = 0; processed < 32 && Serial0.available() > 0; ++processed) {
         applyCommand(static_cast<char>(Serial0.read()));
