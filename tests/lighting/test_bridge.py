@@ -1,241 +1,107 @@
-"""Exercise the production serial parser and bridge against an in-memory ESP32.
+"""Verify legacy/RGB delivery, acknowledgments and persistence with fake firmware.
 
-Depends on the actual firmware's ASCII command contract; simulated DMX counters
-verify status health but do not validate physical RS485 or LED colors.
+Depends on the production serial link; no USB or physical DMX tests are claimed.
 """
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from firmware_fake import FirmwareSerial
+from lighting_api.errors import LightingError
 from lighting_api.lighting_config import LightingSettings
 from lighting_api.lighting_protocol import COLORS, SerialLightingLink
-from lighting_api.lighting_service import LightingService
 
 
-class FirmwareSerial:
-    def __init__(self, **kwargs):
-        self.options = kwargs
-        self.command = "0"
-        self.input = bytearray()
-        self.writes = []
-        self.uptime = 1000
-        self.frames = 40
-        self.open_count = 0
-        self.closed = False
-        self.broken = False
-        self.inject = None
-
-    def open(self):
-        self.closed = False
-        self.open_count += 1
-
-    def close(self):
-        self.closed = True
-
-    def reset_input_buffer(self):
-        self.input.clear()
-
-    def read(self, size):
-        data = bytes(self.input[:size])
-        del self.input[:size]
-        return data
-
-    def write(self, data):
-        if self.broken:
-            raise OSError("USB disconnected")
-        self.writes.append(data)
-        if self.inject is not None:
-            self.input.extend(self.inject)
-            self.inject = None
-            return len(data)
-        command = data.decode()
-        if command in ("\n", "\r", " ", "\t"):
-            return len(data)
-        if command == "?":
-            self.uptime += 200
-            self.frames += 8
-            color = next(name for name, value in COLORS.items() if value[0] == self.command)
-            rgb = ','.join(map(str, COLORS[color][1]))
-            line = (f"STATUS firmware=cabek-dmx-v1 mode=dmx_tx command={self.command} "
-                    f"rgb={rgb} errors=0 frames={self.frames} uptime_ms={self.uptime} "
-                    "uart0_baud=115201 uart2_baud=250000\n")
-        else:
-            self.command = command
-            color = next(name for name, value in COLORS.items() if value[0] == command)
-            line = f"OK {command} {color} {' '.join(map(str, COLORS[color][1]))}\n"
-        self.input.extend(line.encode())
-        return len(data)
-
-
-def make_bridge():
-    now = [0.0]
-    settings = LightingSettings(enabled=True, port="/dev/serial/by-id/test", timeout=.01)
+def make_link(rgb=True):
+    settings = LightingSettings(port='fake', timeout=.01)
     ports = []
-
     def factory(**kwargs):
-        port = FirmwareSerial(**kwargs)
+        port = FirmwareSerial(rgb=rgb, **kwargs)
         ports.append(port)
         return port
-
-    link = SerialLightingLink(settings, factory)
-    service = LightingService(settings, link, lambda: now[0])
-    service.state.transition("BOOTING")
-    return service, ports, now
+    return SerialLightingLink(settings, factory), ports
 
 
-def test_all_legacy_commands_status_and_no_redundant_writes():
-    service, ports, _ = make_bridge()
-    service.synchronize()
-    port = ports[0]
-    assert port.options["exclusive"] is True
-    assert not port.dtr and not port.rts
-    for color, (command, _) in COLORS.items():
-        result = service.link.set_color(color)
-        assert result["command"] == command
-    service.synchronize()
-    count = len(port.writes)
-    for _ in range(100):
-        service.synchronize()
-    assert len(port.writes) == count
-    assert port.open_count == 1
-    service.disconnect()
-
-
-def test_blink_disconnect_reconnect_and_resynchronize_latest_scan():
-    service, ports, now = make_bridge()
-    service.synchronize()
-    assert ports[0].command == "2"
-    now[0] = .5
-    service.synchronize()
-    assert ports[0].command == "0"
-    ports[0].broken = True
-    now[0] = 1
-    service.synchronize()
-    assert not service.status()["esp32_available"]
-    assert service.status()["last_error"]
-    assert service.status()["acknowledged_color"] is None
-    service.state.begin_capture("active")
-    now[0] = 3
-    service.synchronize()
-    assert len(ports) == 2 and ports[1].command == "1"
-    status = service.status()
-    assert status["state"] == "SCANNING" and status["synchronized"]
-    assert status["last_error"] is None
-    service.disconnect()
-
-
-@pytest.mark.parametrize("response", [b"OK 4 WHITE 255 255 255\n", b"OK 2 BLUE 0 0 1\n",
-                                       b"BOOT firmware=cabek-dmx-v1\n", b"\xff\n", b"FAULT DMX\n", b""])
-def test_bad_acknowledgments_never_claim_success(response):
-    service, ports, _ = make_bridge()
-    service.link.connect()
-    ports[0].inject = response
-    with pytest.raises((OSError, TimeoutError)):
-        service.link.set_color("BLUE")
-    assert service.last_successful_command is None
-    service.disconnect()
-
-
-def test_esp32_reboot_and_stalled_dmx_force_reconnect():
-    service, ports, now = make_bridge()
-    service.synchronize()
-    ports[0].uptime = 0
-    now[0] = 5
-    service.synchronize()
-    assert not service.connected
-    now[0] = 7
-    service.synchronize()
-    assert service.connected
-    ports[1].inject = (f"STATUS firmware=cabek-dmx-v1 mode=dmx_tx command=2 rgb=0,0,255 errors=0 "
-                       f"frames={ports[1].frames} uptime_ms={ports[1].uptime + 500} "
-                       "uart0_baud=115201 uart2_baud=250000\n").encode()
-    now[0] = 12
-    service.synchronize()
-    assert not service.connected
-    service.disconnect()
-
-
-def test_auto_detection_rejects_ambiguous_devices(monkeypatch):
-    monkeypatch.setattr("lighting_api.lighting_protocol.glob", lambda pattern: ["one", "two"])
-    with pytest.raises(OSError, match="exactly one"):
-        SerialLightingLink(LightingSettings()).connect()
-
-
-def test_unavailable_hardware_keeps_state_and_retries_with_backoff():
-    service, ports, now = make_bridge()
-    service.link.serial_factory = lambda **kwargs: (_ for _ in ()).throw(OSError("missing USB"))
-    service.state.begin_capture("scan")
-    for _ in range(100):
-        service.synchronize()
-    assert not ports
-    assert service.status()["state"] == "SCANNING"
-    assert not service.status()["synchronized"]
-    assert service.next_connect == 2
-    now[0] = 2
-    service.synchronize()
-    assert service.next_connect == 4
-
-
-def test_desired_state_changes_during_io_are_reported_unsynchronized():
-    service, ports, _ = make_bridge()
-    original = service.link.set_color
-
-    def delayed(color):
-        result = original(color)
-        service.state.begin_capture("new")
-        return result
-
-    service.link.set_color = delayed
-    service.synchronize()
-    status = service.status()
-    assert status["state"] == "SCANNING"
-    assert status["acknowledged_color"] == "BLUE"
-    assert status["synchronized"] is False
-    service.link.set_color = original
-    service.synchronize()
-    assert service.status()["synchronized"]
-    service.disconnect()
-
-
-def test_deadline_expires_without_usb_and_without_status_polling():
-    service, _, now = make_bridge()
-    service.link.serial_factory = lambda **kwargs: (_ for _ in ()).throw(OSError("missing USB"))
-    service.state.begin_capture("scan")
-    service.state.set_readiness(None)
-    service.state.finish_capture("scan", True)
-    service.synchronize()
-    now[0] = 10
-    service.synchronize()
-    assert service.state.state == "READY"
-
-
-def test_slow_readiness_probe_does_not_delay_serial_capture():
-    from threading import Event
-
-    service, _, _ = make_bridge()
-    service.state.transition("OFF")
-    entered, release, red_acknowledged = Event(), Event(), Event()
-    original = service.link.set_color
-
-    def record_color(color):
-        result = original(color)
-        if color == "RED":
-            red_acknowledged.set()
-        return result
-
-    def slow_probe():
-        entered.set()
-        assert release.wait(3)
-
-    service.link.set_color = record_color
-    service.start()
+def test_all_legacy_colors_without_handshake_or_firmware_validation():
+    link, ports = make_link(rgb=False)
     try:
-        service.initialize()
-        service.set_readiness_probe(slow_probe)
-        assert entered.wait(1)
-        service.state.begin_capture("scan")
-        assert red_acknowledged.wait(1)
+        for name, (command, output) in COLORS.items():
+            link.set_color(name)
+            assert ports[0].command == command and ports[0].output == output
+        assert b'?' not in ports[0].writes
+        assert ports[0].open_count == 1
+        assert not ports[0].dtr and not ports[0].rts
+        assert ports[0].options['exclusive']
     finally:
-        release.set()
-        service.close()
-    assert not service.connected
-    assert service.state.state == "OFF"
+        link.close()
+
+
+def test_custom_rgb_capability_is_checked_once_and_writes_are_thread_safe():
+    link, ports = make_link()
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda index: link.set_rgb((index, 23, 45)), range(40)))
+        assert ports[0].writes.count(b'?') == 1
+        assert len([write for write in ports[0].writes if write.startswith(b'R ')]) == 40
+        assert ports[0].open_count == 1
+    finally:
+        link.close()
+
+
+def test_legacy_firmware_rejects_rgb_and_remains_usable():
+    link, ports = make_link(rgb=False)
+    try:
+        with pytest.raises(LightingError) as error:
+            link.set_rgb((12, 34, 56))
+        assert error.value.status_code == 501
+        assert not any(write.startswith(b'R ') for write in ports[0].writes)
+        link.set_color('WHITE')
+        assert ports[0].output == (255, 255, 255)
+    finally:
+        link.close()
+
+
+@pytest.mark.parametrize('response', [b'OK 4 WHITE 255 255 255\n', b'OK 2 BLUE 0 0 1\n',
+                                    b'\xff\n', b'FAULT DMX\n', b''])
+def test_bad_acknowledgments_never_claim_delivery(response):
+    link, ports = make_link()
+    link.connect()
+    ports[0].inject = response
+    try:
+        with pytest.raises(OSError):
+            link.set_color('BLUE')
+    finally:
+        link.close()
+
+
+def test_mismatched_rgb_ack_and_short_write_are_rejected():
+    link, ports = make_link()
+    link.connect()
+    link.require_rgb()
+    try:
+        ports[0].inject = b'OK R RGB 1 2 4\n'
+        with pytest.raises(OSError, match='acknowledgment'):
+            link.set_rgb((1, 2, 3))
+        ports[0].write = lambda data: 0
+        with pytest.raises(OSError, match='Incomplete'):
+            link.set_color('OFF')
+    finally:
+        link.close()
+
+
+def test_auto_detection_rejects_ambiguity_and_failed_open_closes_port(monkeypatch):
+    monkeypatch.setattr('lighting_api.lighting_protocol.glob', lambda pattern: ['one', 'two'])
+    with pytest.raises(OSError, match='exactly one'):
+        SerialLightingLink(LightingSettings()).connect()
+    link, ports = make_link()
+    original = link.serial_factory
+    def broken(**kwargs):
+        port = original(**kwargs)
+        def fail():
+            raise OSError('missing USB')
+        port.open = fail
+        return port
+    link.serial_factory = broken
+    with pytest.raises(OSError, match='missing USB'):
+        link.connect()
+    assert ports[0].closed and link.port is None

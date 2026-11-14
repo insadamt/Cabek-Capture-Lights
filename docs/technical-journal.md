@@ -26,3 +26,26 @@ Software builds and automated tests passed for the lighting implementation and i
 - Verify the NAVIGATE Magic RGB strip's controller and wiring before enabling any physical progressive effects.
 
 For instructions, see [deployment](lighting-deployment.md), [API](lighting-api.md) and [effects](lighting-effects.md).
+
+## 14 Nov 2026 — Minimal direct lighting controller
+
+- Replaced lifecycle/preview APIs with exactly `POST /api/lights/set` and `/off`.
+  Removed readiness gates, capture ownership, simulation/pixel drivers and their
+  state machines. Firmware and DMX transmission code remain unchanged.
+- Reused global interpolation and named choreography; added color_cycle, palettes,
+  uniform speed/duration semantics, easing and indefinite repetition. Finite
+  effects hold their final RGB. One worker owns serial updates and prioritizes OFF.
+- Basic legacy colors require no handshake. RGB is checked only when needed;
+  matching acknowledgments establish initial delivery. USB errors return 503;
+  unsupported RGB returns 501. Later frame errors log and reconnect automatically.
+- Updated CABEK AI to send direct commands with one HTTP worker and its own
+  ten-second completion timer; removed its lighting readiness probe. Updated the
+  frontend maintenance panel and loopback-only proxy to the new contract.
+- Software verification: 86 lighting tests (mocked serial/API/effect/worker and
+  real pyserial pseudo-TTY recovery), 20 CABEK AI lighting/capture tests, seven
+  frontend lighting/proxy tests and production build, native firmware parser checks,
+  and all three PlatformIO firmware builds passed. These do not establish physical USB, DMX or LED behavior.
+  Follow the [manual hardware checklist](lighting-effects.md) for acceptance.
+
+The earlier lifecycle/preview and simulation descriptions above are historical;
+the current contract is the [minimal API reference](lighting-api.md).

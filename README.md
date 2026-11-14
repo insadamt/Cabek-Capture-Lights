@@ -1,59 +1,44 @@
 # CABEK Tunnel Lights
 
-Local lighting control for **CABEK AI**. The application sends scan events to a small HTTP service, which controls the tunnel's exterior RGB lights through an ESP32.
-
-```text
-CABEK AI → Lighting API (:8001) → USB → ESP32 → MAX485 → DMX decoder → RGB strip
-```
-
-The lights signal the tunnel's state: blue during startup, white when ready, red during capture, green on success, and amber on errors.
-
-## Run locally
-
-Requires Python 3.11+ and the connected ESP32 (or the simulation driver).
+Standalone local RGB control: FastAPI → one animation worker → USB Serial → ESP32
+→ MAX485 → analog DMX512 RGB decoder. Depends on Python 3.11+, pyserial and USB
+access. CABEK AI is optional; there are no camera or readiness requirements.
 
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-lighting.txt
 cp .env.example .env
-```
-
-Edit `.env`: verify `CABEK_LIGHTS_PORT` (prefer `/dev/serial/by-id/...`), and use `CABEK_LIGHTS_DRIVER=dmx_rgb` for the real strip. Then:
-
-```sh
+# Set CABEK_LIGHTS_PORT to your /dev/serial/by-id/... device.
 .venv/bin/python -m lighting_api --port 8001
 ```
 
-Use one lighting service process. Close PlatformIO Serial Monitor and any other program using the ESP32 port.
-
-To inspect it, send a request:
+Keep one process and close Serial Monitor. The server binds to `127.0.0.1`.
+Do not publish unauthenticated hardware controls to the LAN or Internet.
 
 ```sh
-curl http://127.0.0.1:8001/api/v1/lights/status
+curl -X POST http://127.0.0.1:8001/api/lights/set \
+  -H 'Content-Type: application/json' -d '{"color":"#FF0000"}'
+curl -X POST http://127.0.0.1:8001/api/lights/off
 ```
 
-CABEK AI runs separately and sends lifecycle events to this service. It needs `CABEK_LIGHTS_API_URL=http://127.0.0.1:8001`.
+Exactly two routes: `POST /api/lights/set` and `POST /api/lights/off`.
+New commands replace the active effect. Finite effects hold their final color;
+repeating effects continue until replaced or stopped. Animations/custom colors
+require RGB firmware; legacy full-strength colors remain available without it.
 
-## What works today
+- [API reference and examples](docs/lighting-api.md)
+- [Hardware, firmware and manual checks](docs/lighting-effects.md)
+- [Local deployment and CABEK AI integration](docs/lighting-deployment.md)
+- [Technical journal](docs/technical-journal.md)
 
-- Fixed colors and global RGB effects on the **existing DMX strip**. Smooth effects require ESP32 firmware advertising `protocol=rgb8-v1`.
-- A maintenance page in CABEK AI at `/maintenance/lights` for previewing supported effects.
-- Progressive/chase/pixel effects **in simulation only**. The NAVIGATE 24V “Magic RGB” strip has not yet been verified or connected to a compatible pixel controller.
-
-## Guides
-
-- [API and example requests](docs/lighting-api.md)
-- [Effects and hardware limits](docs/lighting-effects.md)
-- [Ubuntu deployment](docs/lighting-deployment.md)
-- [Project journal](docs/technical-journal.md)
-
-For development checks:
+Software checks use mocked firmware and a Linux pseudo-TTY, without touching USB:
 
 ```sh
 .venv/bin/pip install -r requirements-lighting-dev.txt
 .venv/bin/python -m pytest -q
-pio run -e serial_only -e dmx_init -e esp32dev
+c++ -std=c++11 -Isrc tests/rgb_command_test.cpp -o /tmp/cabek-rgb-test
+/tmp/cabek-rgb-test
 ```
 
-The lighting API listens on localhost. The development frontend lighting proxy
-also accepts local requests only, even when the rest of the frontend serves the LAN.
+Firmware is preserved. To build all diagnostic stages when PlatformIO is installed:
+`pio run -e serial_only -e dmx_init -e esp32dev`. Flashing is a separate manual step.

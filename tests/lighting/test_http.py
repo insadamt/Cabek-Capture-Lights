@@ -1,57 +1,78 @@
-"""Verify the standalone API, token-free lifecycle delivery and deadline replay.
+"""Verify the two-route contract with real worker scheduling and mock serial.
 
-Depends on TestClient and memory-only output; no CABEK application is imported.
+Depends on TestClient and in-memory firmware; CABEK AI and USB are absent.
 """
+import pytest
 from fastapi.testclient import TestClient
-from lighting_api.main import create_app
+
+from firmware_fake import FirmwareSerial
 from lighting_api.lighting_config import LightingSettings
+from lighting_api.lighting_effects import GLOBAL_EFFECTS
+from lighting_api.lighting_protocol import SerialLightingLink
 from lighting_api.lighting_service import LightingService
+from lighting_api.main import create_app
 
 
-def make_client():
-    now=[0.0]
-    config=LightingSettings(enabled=True, driver='simulated_pixels',)
-    service=LightingService(config,clock=lambda:now[0])
-    return TestClient(create_app(service=service)),service,now
-
-def test_standalone_api_events_and_scan_priority():
-    client,service,now=make_client()
-    assert client.get('/api/v1/lights/status').status_code==200
-    event=dict(session_id='application',sequence=1,state='READY',ready=True)
-    assert client.post('/api/v1/lights/events',json=event).status_code==202
-    assert len(client.get('/api/v1/lights/effects').json())==16
-    assert client.post('/api/v1/lights/effects',json={'effect':'breathing','repeat':True}).status_code==202
-    event.update(sequence=2,state='SCANNING',capture_id='scan')
-    result=client.post('/api/v1/lights/events',json=event)
-    assert result.status_code==202 and not result.json()['preview_active']
-    assert client.post('/api/v1/lights/stop').status_code==409
-    event.update(sequence=3,state='COMPLETED',capture_id=None,elapsed_ms=4000)
-    assert client.post('/api/v1/lights/events',json=event).status_code==202
-    deadline=service.state.completion_deadline
-    now[0]=1
-    client.post('/api/v1/lights/events',json=event)
-    assert service.state.completion_deadline==deadline
-    now[0]=6
-    assert client.get('/api/v1/lights/status').json()['state']=='READY'
-    event.update(sequence=4,state='SCANNING',capture_id=None)
-    assert client.post('/api/v1/lights/events',json=event).status_code==422
+@pytest.fixture
+def controller():
+    settings = LightingSettings(port='fake', timeout=.01)
+    port = FirmwareSerial()
+    service = LightingService(settings, SerialLightingLink(settings, lambda **kwargs: port))
+    with TestClient(create_app(service=service)) as client:
+        yield client, service, port
+    assert not service.thread.is_alive() and service.link.port is None
 
 
-def test_openapi_has_no_auth_and_disabled_service_still_returns_503():
-    client, _, _ = make_client()
-    spec = client.get('/openapi.json').json()
-    assert not spec.get('components', {}).get('securitySchemes')
-    for path in spec['paths'].values():
-        assert all(not operation.get('security') for operation in path.values())
-    disabled = TestClient(create_app(settings=LightingSettings()))
-    assert disabled.get('/api/v1/lights/status').status_code == 503
+def test_exactly_two_endpoints_and_defaults_work_without_application(controller):
+    client, service, port = controller
+    assert set(client.app.openapi()['paths']) == {'/api/lights/set', '/api/lights/off'}
+    response = client.post('/api/lights/set', json={})
+    assert response.status_code == 200
+    assert response.json() == {'success': True, 'effect': 'solid', 'status': 'active'}
+    assert port.output == (255, 255, 255)
+    assert client.post('/api/lights/off').json() == {'success': True, 'status': 'off'}
+    assert service.active is None and port.output == (0, 0, 0)
+    assert client.post('/api/v1/lights/events', json={}).status_code == 404
 
 
-def test_previews_tests_and_stop_work_without_headers():
-    client, _, _ = make_client()
-    event = dict(session_id='app', sequence=1, state='READY', ready=True)
-    assert client.post('/api/v1/lights/events', json=event).status_code == 202
-    assert client.post('/api/v1/lights/test', json={'color':'RED'}).status_code == 202
-    assert client.post('/api/v1/lights/effects', json={'effect':'solid'}).status_code == 202
-    assert client.post('/api/v1/lights/stop').status_code == 202
-    assert client.post('/api/v1/lights/state', json={'state':'OFF'}).status_code == 202
+@pytest.mark.parametrize('effect', GLOBAL_EFFECTS)
+def test_every_effect_is_accepted_and_replaced(controller, effect):
+    client, service, port = controller
+    payload = {'effect': effect}
+    if effect == 'color_cycle':
+        payload['colors'] = ['#0066FF', '#8B00FF', '#00FFFF']
+    response = client.post('/api/lights/set', json=payload)
+    assert response.status_code == (200 if effect == 'solid' else 202)
+    assert response.json()['effect'] == effect
+    assert client.post('/api/lights/set', json={'color': '#FF0000'}).status_code == 200
+    assert port.output == (255, 0, 0)
+
+
+def test_validation_and_brightness(controller):
+    client, _, port = controller
+    assert client.post('/api/lights/set', json={'brightness': 101}).status_code == 422
+    assert client.post('/api/lights/set', json={'effect': 'missing'}).json()['success'] is False
+    response = client.post('/api/lights/set', json={'color': '#FF8000', 'brightness': 50, 'speed': 'ignored'})
+    assert response.status_code == 200 and port.output == (128, 64, 0)
+
+
+def test_disconnected_hardware_is_not_successful_and_off_cancels(controller):
+    client, service, port = controller
+    client.post('/api/lights/set', json={'effect': 'breathing', 'repeat': True})
+    port.broken = True
+    response = client.post('/api/lights/off')
+    assert response.status_code == 503 and response.json()['success'] is False
+    assert service.active is None and service.desired_output == (0, 0, 0)
+    response = client.post('/api/lights/set', json={'color': '#FF0000'})
+    assert response.status_code == 503
+
+
+def test_legacy_animations_fail_clearly_but_basic_colors_still_work(controller):
+    client, _, port = controller
+    port.rgb_supported = False
+    assert client.post('/api/lights/set', json={'color': '#0000FF'}).status_code == 200
+    response = client.post('/api/lights/set', json={'effect': 'breathing'})
+    assert response.status_code == 501
+    assert response.json()['error']['code'] == 'unsupported_firmware'
+    assert client.post('/api/lights/set', json={'color': '#123456'}).status_code == 501
+    assert client.post('/api/lights/off').status_code == 200

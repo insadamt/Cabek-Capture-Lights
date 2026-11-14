@@ -1,221 +1,201 @@
-"""Run the persistent serial bridge and resynchronize desired state after failures.
+"""Schedule lighting commands and render effects through one serial-owning worker.
 
-Depends on LightingState, SerialLightingLink and an injected application readiness
-probe. Hardware I/O runs on one daemon worker and never blocks capture/HTTP work.
+Depends on deterministic effects and SerialLightingLink. HTTP waits only for the
+first acknowledged frame; later failures are logged and retried after USB loss.
 """
-
+from collections import deque
+from concurrent.futures import Future
+from dataclasses import dataclass
 import logging
-from threading import Event, Thread
+from threading import Condition, Thread
 import time
 
-from lighting_api.lighting_protocol import COLORS, SerialLightingLink
-from lighting_api.lighting_drivers import DmxRgbDriver, SimulatedPixelDriver
-from lighting_api.lighting_engine import LightingEngine
-from lighting_api.lighting_state import LightingState, timestamp
-
+from lighting_api.errors import LightingError
+from lighting_api.lighting_effects import EffectRequest, render_effect
+from lighting_api.lighting_protocol import SerialLightingLink
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PendingCommand:
+    request: EffectRequest | None
+    generation: int
+    result: Future
 
 
 class LightingService:
     def __init__(self, settings, link=None, clock=time.monotonic):
         self.settings = settings
-        self.state = LightingState(clock)
         self.link = link or SerialLightingLink(settings)
-        self.driver = (SimulatedPixelDriver(settings) if settings.driver == "simulated_pixels"
-                       else DmxRgbDriver(self.link))
-        self.engine = LightingEngine(self.state, settings)
-        self.acknowledged_output = None
-        self.acknowledged_rgb = None
-        self.next_frame = 0
-        self.sent_revision = None
         self.clock = clock
-        self.stop_event = Event()
-        self.thread = None
-        self.readiness_thread = None
-        self.connected = False
-        self.firmware = None
-        self.acknowledged_color = None
-        self.last_successful_command = None
-        self.last_error = None
-        self.last_seen_at = None
+        self.condition = Condition()
+        self.pending = deque()
+        self.generation = 0
+        self.active = None
+        self.started_at = 0
+        self.start_color = (0, 0, 0)
+        self.desired_output = None
+        self.acknowledged_output = None
         self.next_connect = 0
         self.next_health = 0
-        self.readiness_probe = None
-        self.next_readiness = 0
+        self.last_error = None
+        self.stopping = False
+        self.thread = None
 
     def start(self):
-        if not self.settings.enabled or self.thread is not None:
-            return
-        with self.state.lock:
-            self.state.transition("BOOTING")
-        self.thread = Thread(target=self.run, name="cabek-lighting", daemon=True)
-        self.thread.start()
-        self.readiness_thread = Thread(target=self.monitor_readiness, name="cabek-lighting-health", daemon=True)
-        self.readiness_thread.start()
+        with self.condition:
+            if self.thread is None:
+                self.thread = Thread(target=self.run, name='lighting-animation', daemon=True)
+                self.thread.start()
 
-    def initialize(self):
-        with self.state.lock:
-            if self.settings.enabled:
-                self.state.transition("INITIALIZING")
+    def submit(self, request: EffectRequest | None):
+        result = Future()
+        with self.condition:
+            if self.stopping or self.thread is None:
+                raise LightingError(503, 'service_unavailable', 'Lighting worker is unavailable.')
+            self.generation += 1
+            self.active = None
+            # Keep queued OFF commands ahead of SET; superseded SET callers get a clear error.
 
-    def set_readiness_probe(self, readiness_probe):
-        with self.state.lock:
-            self.readiness_probe = readiness_probe
-            self.next_readiness = 0
+            for command in list(self.pending):
+                if command.request is not None:
+                    self.pending.remove(command)
+                    command.result.set_exception(LightingError(409, 'superseded', 'Replaced by a newer lighting command.'))
+            command = PendingCommand(request, self.generation, result)
+            if request is None:
+                self.pending.appendleft(command)
+                self.desired_output = (0, 0, 0)
+            else:
+                self.pending.append(command)
+            self.condition.notify()
+        return result.result()
+
+    def set_effect(self, request):
+        return self.submit(request)
+
+    def off(self):
+        return self.submit(None)
 
     def run(self):
         try:
-            while not self.stop_event.is_set():
-                began = time.monotonic()
+            while True:
+                with self.condition:
+                    if self.stopping:
+                        break
+                    command = self.pending.popleft() if self.pending else None
+                if command is not None:
+                    self.execute_command(command)
+                    continue
                 self.synchronize()
-                elapsed = time.monotonic() - began
-                self.stop_event.wait(max(0, 1 / self.settings.update_hz - elapsed))
+                with self.condition:
+                    if not self.pending and not self.stopping:
+                        self.condition.wait(1 / self.settings.update_hz)
         finally:
-
-            # Shutdown OFF is best effort; unplugged hardware must not hold up exit.
-
             try:
-                if self.connected:
-                    self.driver.set_global_color((0, 0, 0), 100)
-            except Exception:
-                logger.warning("Could not acknowledge shutdown OFF")
-            self.disconnect()
+                if self.link.port is not None:
+                    self.link.set_color('OFF')
+            except OSError:
+                logger.warning('Could not acknowledge shutdown OFF')
+            self.link.close()
 
-    def monitor_readiness(self):
-
-        # Image/storage checks must never delay a capture's serial color command.
-
-        while not self.stop_event.is_set():
-            self.check_readiness()
-            self.stop_event.wait(0.1)
-
-    def check_readiness(self):
-        if self.readiness_probe is None or self.clock() < self.next_readiness:
-            return
-        self.next_readiness = self.clock() + self.settings.health_seconds
+    def execute_command(self, command):
+        request = command.request
         try:
-            self.readiness_probe()
-        except Exception as error:
-            if self.state.readiness_error != "Required application services are unavailable; inspect server logs/configuration.":
-                logger.warning("Lighting readiness check failed: %s", type(error).__name__)
-            self.state.set_readiness("Required application services are unavailable; inspect server logs/configuration.")
-        else:
-            if not self.state.ready:
-                logger.info("Required capture services passed lighting readiness checks")
-            self.state.set_readiness(None)
+            self.link.connect()
+            if request is not None and request.effect != 'solid':
+                self.link.require_rgb()
+            start_color = self.acknowledged_output or (0, 0, 0)
+            output = (0, 0, 0) if request is None else render_effect(request, 0, start_color).output_rgb
+            # Initial frames are always acknowledged, even when the requested RGB is unchanged.
+
+            self.link.send_output(output)
+            self.acknowledged_output = output
+            self.last_error = None
+            self.next_health = self.clock() + self.settings.health_seconds
+            with self.condition:
+                if command.generation == self.generation:
+                    self.start_color = start_color
+                    self.started_at = self.clock()
+                    self.active = request
+                    self.desired_output = output
+            response = {'success': True, 'status': 'off'} if request is None else {
+                'success': True, 'effect': request.effect,
+                'status': 'active' if request.effect == 'solid' else 'running',
+            }
+            command.result.set_result(response)
+        except LightingError as error:
+            command.result.set_exception(error)
+        except OSError as error:
+            self.record_failure(error)
+            # A failed request is rejected, rather than unexpectedly activated on reconnect.
+
+            command.result.set_exception(LightingError(503, 'hardware_unavailable',
+                                                     f'ESP32 command could not be delivered: {error}'))
 
     def synchronize(self):
         now = self.clock()
-        self.state.desired_color()
-        if not self.connected and now < self.next_connect:
+        if now < self.next_connect:
+            return
+        with self.condition:
+            generation = self.generation
+            active = self.active
+            frame = render_effect(active, now - self.started_at, self.start_color) if active else None
+            if frame is not None:
+                self.desired_output = frame.output_rgb
+            output = self.desired_output
+            if self.pending:
+                return
+        if output is None:
             return
         try:
-            if not self.connected:
-                status = self.driver.connect()
-                self.record_status(status)
-                with self.state.lock:
-                    self.connected = True
-                    self.acknowledged_color = None
-                    self.acknowledged_output = None
-                    self.acknowledged_rgb = None
-                    self.next_frame = 0
-                logger.info("Lighting driver connected: %s", self.settings.driver)
-            with self.state.lock:
-                frame = self.engine.render(self.driver.get_capabilities())
-                rendered_revision = self.state.revision
-            output = frame.pixels if frame.pixels is not None else frame.output_rgb
-            if output != self.acknowledged_output and (now >= self.next_frame or self.sent_revision != self.state.revision):
-                status = (self.driver.set_pixels(frame.pixels) if frame.pixels is not None
-                          else self.driver.set_global_color(frame.color, frame.brightness))
-                color = self.color_name(frame.output_rgb)
-                self.sent_revision = rendered_revision
-                with self.state.lock:
-                    self.acknowledged_color = color
-                    self.acknowledged_output = output
-                    self.acknowledged_rgb = frame.output_rgb if frame.pixels is None else None
-                    self.last_successful_command = {
-                        "command": status["command"], "color": color, "acknowledged_at": timestamp(),
-                    }
-                self.record_status(status)
-                self.next_frame = now + 1 / self.settings.update_hz
-                self.next_health = self.clock() + self.settings.health_seconds
+            self.link.connect()
+            if active is not None and active.effect != 'solid':
+                self.link.require_rgb()
+            with self.condition:
+                if generation != self.generation or self.pending:
+                    return
+            if output != self.acknowledged_output:
+                self.link.send_output(output)
+                self.acknowledged_output = output
+                self.next_health = now + self.settings.health_seconds
             elif now >= self.next_health:
-                status = self.driver.get_status()
-                self.record_status(status)
-                expected_rgb = ','.join(map(str, self.acknowledged_rgb)) if self.acknowledged_rgb is not None else None
-                if status["command"] != self.last_successful_command["command"] or (
-                        expected_rgb is not None and status["rgb"] != expected_rgb):
+                status = self.link.query_status()
+                # A device reboot or another writer invalidates the last acknowledged output.
 
-                    # External commands invalidate confirmation until the current frame is replayed.
-
-                    self.acknowledged_color = None
+                if status.get('rgb') != ','.join(map(str, output)):
                     self.acknowledged_output = None
-                    self.acknowledged_rgb = None
-                self.next_health = self.clock() + self.settings.health_seconds
-        except Exception as error:
-            message = f"{type(error).__name__}: {error}"
-            with self.state.lock:
-                changed = self.last_error != message
-                self.last_error = message
-            if changed:
-                logger.warning("Lighting unavailable: %s", message)
-            self.disconnect()
-            self.next_connect = self.clock() + self.settings.reconnect_seconds
-
-    @staticmethod
-    def color_name(output):
-        return next((name for name, (_, value) in COLORS.items() if value == output),
-                    '#' + ''.join(f'{channel:02X}' for channel in output))
-
-    def record_status(self, status):
-        with self.state.lock:
-            self.firmware = status.copy()
-            self.last_seen_at = timestamp()
+                self.next_health = now + self.settings.health_seconds
             self.last_error = None
+            with self.condition:
+                if frame is not None and frame.done and generation == self.generation:
+                    self.active = None
+        except LightingError as error:
+            logger.error('Lighting animation stopped: %s', error.message)
+            with self.condition:
+                if generation == self.generation:
+                    self.active = None
+                    self.desired_output = None
+            self.last_error = error.message
+        except OSError as error:
+            self.record_failure(error)
 
-    def disconnect(self):
-        try:
-            self.driver.disconnect()
-        except Exception:
-            logger.warning("Could not close lighting serial port")
-        with self.state.lock:
-            self.connected = False
-            self.acknowledged_color = None
-            self.acknowledged_output = None
-            self.acknowledged_rgb = None
+    def record_failure(self, error):
+        message = str(error)
+        if message != self.last_error:
+            logger.warning('Lighting unavailable: %s', message)
+        self.last_error = message
+        self.link.close()
+        self.acknowledged_output = None
+        self.next_connect = self.clock() + self.settings.reconnect_seconds
 
     def close(self):
-        with self.state.lock:
-            self.state.capture_id = None
-            self.state.transition("OFF")
-        if self.thread is not None and self.thread.is_alive() and self.connected:
-            self.stop_event.wait(1.1)
-        self.stop_event.set()
+        with self.condition:
+            self.stopping = True
+            self.active = None
+            for command in self.pending:
+                command.result.set_exception(LightingError(503, 'service_unavailable', 'Lighting worker is stopping.'))
+            self.pending.clear()
+            self.condition.notify()
         if self.thread is not None:
-            self.thread.join(timeout=self.settings.timeout * 3 + 2)
-        if self.readiness_thread is not None:
-            self.readiness_thread.join(timeout=1)
-
-    def status(self):
-        with self.state.lock:
-            snapshot = self.state.snapshot()
-            frame = self.engine.render(self.driver.get_capabilities())
-            output = frame.pixels if frame.pixels is not None else frame.output_rgb
-            snapshot.update(color=self.color_name(frame.output_rgb), rgb=frame.output_rgb,
-                            capability_error=(None if self.driver.get_capabilities()['supports_smooth_transitions']
-                                              else 'RGB extension not confirmed; effects require protocol=rgb8-v1.'),
-                            brightness=frame.brightness, active_effect=self.engine.active_effect,
-                            preview_active=self.engine.preview is not None,
-                            simulated=self.settings.driver == "simulated_pixels",
-                            pixels=frame.pixels, requested_effect=(self.engine.preview.model_dump(
-                                exclude_unset=True) if self.engine.preview else None),
-                            acknowledged_rgb=self.acknowledged_rgb)
-            return {**snapshot, "enabled": self.settings.enabled,
-                    "connection_status": "connected" if self.connected else (
-                        "disconnected" if self.settings.enabled else "disabled"),
-                    "esp32_available": self.connected and self.settings.driver == "dmx_rgb",
-                    "synchronized": self.connected and self.acknowledged_output == output,
-                    "acknowledged_color": self.acknowledged_color,
-                    "firmware": self.firmware, "last_successful_command": self.last_successful_command,
-                    "last_error": self.last_error, "last_seen_at": self.last_seen_at}
+            self.thread.join(timeout=self.settings.timeout * 4 + 2)

@@ -5,7 +5,6 @@ host transport behavior without claiming physical USB or LED acceptance.
 """
 
 import os
-from pathlib import Path
 import select
 from threading import Event, Thread
 
@@ -16,7 +15,7 @@ pytest.importorskip("serial")
 from lighting_api.lighting_config import LightingSettings
 from lighting_api.lighting_protocol import COLORS, SerialLightingLink
 from lighting_api.lighting_service import LightingService
-from test_bridge import FirmwareSerial
+from firmware_fake import FirmwareSerial
 
 
 class FirmwarePeer:
@@ -48,28 +47,27 @@ def test_real_serial_session_and_reconnect_to_reenumerated_device(tmp_path):
     first, second = FirmwarePeer(), FirmwarePeer()
     stable_port = tmp_path / "stable-esp32"
     stable_port.symlink_to(first.device)
-    settings = LightingSettings(enabled=True, port=str(stable_port), timeout=.3)
-    service = LightingService(settings, SerialLightingLink(settings))
+    settings = LightingSettings(port=str(stable_port), timeout=.3)
+    link = SerialLightingLink(settings)
+    service = LightingService(settings, link)
     try:
-        service.state.transition("BOOTING")
-        service.synchronize()
-        assert service.connected
-        for color, (command, _) in COLORS.items():
-            assert service.link.set_color(color)["command"] == command
-        service.state.begin_capture("capture")
+        for name, (command, _) in COLORS.items():
+            link.set_color(name)
+            assert first.firmware.command == command
+        service.desired_output = (255, 0, 0)
         service.synchronize()
         assert first.firmware.command == "1"
-        service.disconnect()
+        link.close()
+        service.acknowledged_output = None
         stable_port.unlink()
         service.synchronize()
-        assert not service.connected
-        assert service.status()["state"] == "SCANNING"
+        assert link.port is None and service.last_error
         stable_port.symlink_to(second.device)
         service.next_connect = 0
         service.synchronize()
-        assert service.connected and second.firmware.command == "1"
-        assert service.status()["synchronized"]
+        assert link.port is not None and second.firmware.command == "1"
+        assert service.acknowledged_output == (255, 0, 0)
     finally:
-        service.disconnect()
+        link.close()
         first.close()
         second.close()

@@ -1,4 +1,4 @@
-# Starts CABEK AI, which publishes lifecycle events to the separate lighting API.
+# Starts CABEK AI, which sends direct lighting commands to the separate lighting API.
 # Depends on /opt/cabek-ai, the cabek account, and /etc/cabek-ai.env.
 [Unit]
 Description=CABEK tunnel application and ESP32 lighting
